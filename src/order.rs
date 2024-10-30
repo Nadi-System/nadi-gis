@@ -2,11 +2,12 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use crate::types::Point2D;
+use anyhow::Context;
 use clap::Args;
 use gdal::vector::{
     Defn, Feature, FieldDefn, FieldValue, Geometry, Layer, LayerAccess, LayerOptions, OGRFieldType,
 };
-use gdal::{Dataset, DriverManager};
+use gdal::{Dataset, DriverManager, DriverType};
 
 use crate::cliargs::CliAction;
 use crate::types::*;
@@ -73,10 +74,15 @@ impl CliAction for CliArgs {
             }
         }
 
-        let driver = DriverManager::get_driver_by_name("GPKG")?;
+        let driver = if let Some(d) = &self.driver {
+            DriverManager::get_driver_by_name(d)?
+        } else {
+            DriverManager::get_output_driver_for_dataset_name(&self.output.0, DriverType::Vector)
+                .context("Driver not found for the output filename")?
+        };
+
         let mut out_data = driver.create_vector_only(&self.output.0)?;
-        // Not supported in all the formats, so removing it.
-        // let mut txn = out_data.start_transaction()?;
+
         let layer = out_data.create_layer(LayerOptions {
             name: self
                 .output
@@ -87,6 +93,7 @@ impl CliAction for CliArgs {
             ty: gdal_sys::OGRwkbGeometryType::wkbLineString,
             ..Default::default()
         })?;
+
         let fields_defn = streams_lyr
             .defn()
             .fields()
@@ -101,6 +108,8 @@ impl CliAction for CliArgs {
         FieldDefn::new("order", OGRFieldType::OFTInteger64)?.add_to_layer(&layer)?;
         let defn = Defn::from_layer(&layer);
         let order: Vec<i64> = points.iter().map(|(a, b)| order[&(a, b)] as i64).collect();
+        let total = streams_lyr.feature_count();
+        let mut progress = 0;
         for (i, feat) in streams_lyr.features().enumerate() {
             let mut ft = Feature::new(&defn)?;
             ft.set_geometry(feat.geometry().unwrap().clone())?;
@@ -111,6 +120,11 @@ impl CliAction for CliArgs {
             }
             ft.set_field("order", &FieldValue::Integer64Value(order[i]))?;
             ft.create(&layer)?;
+
+            if self.verbose {
+                progress += 1;
+                println!("Writing Features: {}", progress * 100 / total);
+            }
         }
         Ok(())
     }
