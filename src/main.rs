@@ -3,26 +3,21 @@
 use crate::cliargs::CliAction;
 use clap::{Parser, Subcommand};
 
-mod branches;
 mod cliargs;
-mod layers;
 mod types;
-mod usgs;
 mod utils;
 
-#[derive(Parser)]
-struct Cli {
-    /// Don't print the stderr outputs
-    #[arg(short, long, action)]
-    quiet: bool,
-    /// Command to run
-    #[command(subcommand)]
-    action: Action,
-}
-
-/// generate the subcommands using the module, command name and docstring.
+/// Generate the subcommands using the module, command name and docstring.
+///
+/// The macro will load the mod, and use the CliArgs defined in the
+/// mod to define the command. It will also forward the doc strings to
+/// the corresponding commands so that they can be accessed from help.
 macro_rules! subcommands{
     { $( $(#[doc = $doc:expr])* $mod:ident $cmd:ident ),*$(,)? } => {
+	$(
+	    mod $mod;
+	)*
+
 	#[derive(Subcommand)]
 	enum Action {
 	    $( $(#[doc=$doc])*
@@ -39,7 +34,6 @@ macro_rules! subcommands{
 		}
 	    }
 	}
-
     }
 }
 
@@ -49,13 +43,30 @@ subcommands! {
     /// Download data from USGS NHD+
     usgs Usgs,
     /// Show list of layers in a GIS file
+    ///
+    /// This is useful to peek into what a GIS file has, so you can
+    /// pass that layer as a input file to other commands.
     layers Layers,
-    /// Detect Branches in the stream network
+    /// Check the stream network to see outlet, branches, etc
     ///
     /// The command will list the count of different types of
     /// nodes. If output is given, it'll save the output GIS file with
-    /// branch type and the location
-    branches Branches,
+    /// branch type and the location. To use a streams file for
+    /// network generation make sure it has only one outlet, and no
+    /// branches. If it has zero outlet, and same number of branches
+    /// and confluences, then it is not a streams file but a list of
+    /// points.
+    check Check
+}
+
+#[derive(Parser)]
+struct Cli {
+    /// Don't print the stderr outputs
+    #[arg(short, long, action)]
+    quiet: bool,
+    /// Command to run
+    #[command(subcommand)]
+    action: Action,
 }
 
 fn main() -> anyhow::Result<()> {

@@ -41,13 +41,20 @@ impl CliAction for CliArgs {
         let mut branches: HashSet<Point2D> = HashSet::with_capacity(nodes_count);
         let mut confluences: HashSet<Point2D> = HashSet::with_capacity(nodes_count);
         let total = streams.len();
+        let mut points = 0;
         for (i, (_name, geom)) in streams.iter().enumerate() {
             let start = Point2D::new3(geom.get_point(0))?;
-            let end = Point2D::new3(geom.get_point((geom.point_count() - 1) as i32))?;
 
             if !start_nodes.insert(start.clone()) {
                 branches.insert(start);
             }
+
+            if geom.point_count() == 1 {
+                points += 1;
+                continue;
+            }
+
+            let end = Point2D::new3(geom.get_point((geom.point_count() - 1) as i32))?;
 
             if !end_nodes.insert(end.clone()) {
                 confluences.insert(end);
@@ -66,6 +73,19 @@ impl CliAction for CliArgs {
             .difference(&end_nodes)
             .map(|p| p.clone())
             .collect();
+
+        if points > 0 {
+            eprintln!("Invalid Streams File: Point Geometry ({points})");
+        }
+        if outlets.len() != 1 {
+            eprintln!(
+                "Invalid Streams File: Need 1 Outlet (has {})",
+                outlets.len()
+            );
+        }
+        if !branches.is_empty() {
+            eprintln!("Invalid Streams File: Branches ({})", branches.len());
+        }
 
         let categories = [
             ("Outlet", outlets), // all the outlet points; ideally should be 1 for nadi-network
