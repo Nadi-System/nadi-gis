@@ -56,7 +56,14 @@ subcommands! {
     /// branches. If it has zero outlet, and same number of branches
     /// and confluences, then it is not a streams file but a list of
     /// points.
-    check Check
+    check Check,
+    /// Order the streams, adds order attribute to each segment
+    ///
+    /// Use valid streams file for good results. If the streams has
+    /// points, it'll error out, if it has branches, then only the
+    /// main branch will get the upstream stream order, other branches
+    /// will start from 0.
+    order Order,
 }
 
 #[derive(Parser)]
