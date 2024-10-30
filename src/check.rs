@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::Args;
 use gdal::vector::{FieldValue, Geometry, Layer, LayerAccess, LayerOptions, OGRFieldType};
-use gdal::{Dataset, Driver, DriverManager, GdalOpenFlags, Metadata};
+use gdal::{Dataset, Driver, DriverManager, DriverType, GdalOpenFlags, Metadata};
 
 use crate::cliargs::CliAction;
 use crate::types::*;
@@ -95,7 +95,12 @@ impl CliAction for CliArgs {
         ];
 
         if let Some((filename, lyr)) = &self.output {
-            let driver = get_driver_by_filename(&filename, &self.driver)?;
+            let driver = if let Some(d) = &self.driver {
+                DriverManager::get_driver_by_name(d)?
+            } else {
+                DriverManager::get_output_driver_for_dataset_name(&filename, DriverType::Vector)
+                    .context("Driver not found for the output filename")?
+            };
             let mut out_data = driver.create_vector_only(&filename)?;
             // let mut txn = out_data.start_transaction()?;
             let mut layer = out_data.create_layer(LayerOptions {
@@ -133,128 +138,4 @@ impl CliAction for CliArgs {
 
         Ok(())
     }
-}
-
-fn get_geometries(
-    layer: &mut Layer,
-    field: &Option<String>,
-) -> Result<Vec<(String, Geometry)>, anyhow::Error> {
-    layer
-        .features()
-        .enumerate()
-        .map(|(i, f)| {
-            let geom = match f.geometry() {
-                Some(g) => g.clone(),
-                None => {
-                    // TODO take X,Y possible names as Vec<String>
-                    let x = f.field_as_double_by_name("lon")?.unwrap();
-                    let y = f.field_as_double_by_name("lat")?.unwrap();
-                    let mut pt = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbPoint)?;
-                    pt.add_point((x, y, 0.0));
-                    pt
-                }
-            };
-            let name = if let Some(name) = field {
-                f.field_as_string_by_name(name)?.unwrap_or("".to_string())
-            } else {
-                i.to_string()
-            };
-            Ok((name, geom.to_owned()))
-        })
-        .collect()
-}
-
-fn get_driver_by_filename(filename: &PathBuf, driver: &Option<String>) -> anyhow::Result<Driver> {
-    let drivers =
-        get_drivers_for_filename(filename.to_str().unwrap(), &GdalOpenFlags::GDAL_OF_VECTOR);
-
-    if let Some(driver) = driver {
-        drivers
-            .into_iter()
-            .filter(|d| d.short_name() == *driver)
-            .next()
-            .context(format!(
-                "There is no matching vector driver {driver} for filename {filename:?}"
-            ))
-    } else {
-        if drivers.len() > 1 {
-            eprintln!(
-                "Multiple drivers are compatible defaulting to the first: {:?}",
-                drivers
-                    .iter()
-                    .map(|d| d.short_name())
-                    .collect::<Vec<String>>()
-            )
-        }
-        drivers.into_iter().next().context(format!(
-            "Couldn't infer driver based on filename: {filename:?}"
-        ))
-    }
-}
-
-// remove once the gdal has the pull request merged
-// https://github.com/georust/gdal/pull/510
-fn get_drivers_for_filename(filename: &str, options: &GdalOpenFlags) -> Vec<Driver> {
-    let ext = {
-        let filename = filename.to_ascii_lowercase();
-        let e = match filename.rsplit_once(".") {
-            Some(("", _)) => "", // hidden file no ext
-            Some((f, "zip")) => {
-                // zip files could be zipped shp or gpkg
-                if f.ends_with(".shp") {
-                    "shp.zip"
-                } else if f.ends_with(".gpkg") {
-                    "gpkg.zip"
-                } else {
-                    "zip"
-                }
-            }
-            Some((_, e)) => e, // normal file with ext
-            None => "",
-        };
-        e.to_string()
-    };
-
-    let mut drivers: Vec<Driver> = Vec::new();
-    for i in 0..DriverManager::count() {
-        let d = DriverManager::get_driver(i).expect("Index for this loop should be valid");
-        let mut supports = false;
-        if (d.metadata_item("DCAP_CREATE", "").is_some()
-            || d.metadata_item("DCAP_CREATECOPY", "").is_some())
-            && ((options.contains(GdalOpenFlags::GDAL_OF_VECTOR)
-                && d.metadata_item("DCAP_VECTOR", "").is_some())
-                || (options.contains(GdalOpenFlags::GDAL_OF_RASTER)
-                    && d.metadata_item("DCAP_RASTER", "").is_some()))
-        {
-            supports = true;
-        } else if options.contains(GdalOpenFlags::GDAL_OF_VECTOR)
-            && d.metadata_item("DCAP_VECTOR_TRANSLATE_FROM", "").is_some()
-        {
-            supports = true;
-        }
-        if !supports {
-            continue;
-        }
-
-        if let Some(e) = &d.metadata_item("DMD_EXTENSION", "") {
-            if *e == ext {
-                drivers.push(d);
-                continue;
-            }
-        }
-        if let Some(e) = d.metadata_item("DMD_EXTENSIONS", "") {
-            if e.split(" ").collect::<Vec<&str>>().contains(&ext.as_str()) {
-                drivers.push(d);
-                continue;
-            }
-        }
-
-        if let Some(pre) = d.metadata_item("DMD_CONNECTION_PREFIX", "") {
-            if filename.starts_with(&pre) {
-                drivers.push(d);
-            }
-        }
-    }
-
-    return drivers;
 }

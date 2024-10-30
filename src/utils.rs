@@ -40,3 +40,32 @@ pub fn parse_layer(arg: &str) -> Result<(PathBuf, String), anyhow::Error> {
         }
     }
 }
+
+pub fn get_geometries(
+    layer: &mut Layer,
+    field: &Option<String>,
+) -> Result<Vec<(String, Geometry)>, anyhow::Error> {
+    layer
+        .features()
+        .enumerate()
+        .map(|(i, f)| {
+            let geom = match f.geometry() {
+                Some(g) => g.clone(),
+                None => {
+                    // TODO take X,Y possible names as Vec<String>
+                    let x = f.field_as_double_by_name("lon")?.unwrap();
+                    let y = f.field_as_double_by_name("lat")?.unwrap();
+                    let mut pt = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbPoint)?;
+                    pt.add_point((x, y, 0.0));
+                    pt
+                }
+            };
+            let name = if let Some(name) = field {
+                f.field_as_string_by_name(name)?.unwrap_or("".to_string())
+            } else {
+                i.to_string()
+            };
+            Ok((name, geom.to_owned()))
+        })
+        .collect()
+}
