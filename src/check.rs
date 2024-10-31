@@ -1,14 +1,14 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use anyhow::Context;
-use clap::Args;
-use gdal::vector::{FieldValue, Geometry, Layer, LayerAccess, LayerOptions, OGRFieldType};
-use gdal::{Dataset, Driver, DriverManager, DriverType, GdalOpenFlags, Metadata};
-
 use crate::cliargs::CliAction;
 use crate::types::*;
 use crate::utils::*;
+use anyhow::Context;
+use clap::Args;
+use gdal::spatial_ref::SpatialRef;
+use gdal::vector::{FieldValue, Geometry, Layer, LayerAccess, LayerOptions, OGRFieldType};
+use gdal::{Dataset, Driver, DriverManager, DriverType, GdalOpenFlags, Metadata};
 
 #[derive(Args)]
 pub struct CliArgs {
@@ -101,29 +101,28 @@ impl CliAction for CliArgs {
                 DriverManager::get_output_driver_for_dataset_name(&filename, DriverType::Vector)
                     .context("Driver not found for the output filename")?
             };
+            let lyr_name = lyr.as_deref().unwrap_or("branches");
             let mut out_data = driver.create_vector_only(&filename)?;
-            // let mut txn = out_data.start_transaction()?;
-            let mut layer = out_data.create_layer(LayerOptions {
-                name: lyr.as_ref().unwrap_or(&"branches".to_string()),
-                srs: streams_lyr.spatial_ref().as_ref(),
-                ty: gdal_sys::OGRwkbGeometryType::wkbPoint,
-                ..Default::default()
-            })?;
-            layer.create_defn_fields(&[("category", OGRFieldType::OFTString)])?;
-            let fields = ["category"];
+            let sref = streams_lyr.spatial_ref();
 
-            for (cat, list) in categories {
-                for pt in list {
-                    let mut geom = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbPoint)?;
-                    geom.add_point_2d(pt.coord2());
-                    layer.create_feature_fields(
-                        geom,
-                        &fields,
-                        &[FieldValue::StringValue(cat.to_string())],
-                    )?;
-                }
+            let mut trans = false;
+            // have to use trans flag here because of borrow rule;
+            // uses transaction when it can to speed up the process.
+            if let Ok(mut txn) = out_data.start_transaction() {
+                write_output(&categories, &mut txn, lyr_name, sref.as_ref(), self.verbose)?;
+                txn.commit()?;
+                trans = true;
+            };
+
+            if !trans {
+                write_output(
+                    &categories,
+                    &mut out_data,
+                    lyr_name,
+                    sref.as_ref(),
+                    self.verbose,
+                )?;
             }
-            // txn.commit()?;
         } else {
             for (cat, list) in categories {
                 println!("* {}: {}", cat, list.len());
@@ -138,4 +137,40 @@ impl CliAction for CliArgs {
 
         Ok(())
     }
+}
+
+fn write_output(
+    categories: &[(&str, HashSet<Point2D>)],
+    ds: &mut Dataset,
+    lyr: &str,
+    sref: Option<&SpatialRef>,
+    verbose: bool,
+) -> anyhow::Result<()> {
+    let mut layer = ds.create_layer(LayerOptions {
+        name: lyr,
+        srs: sref,
+        ty: gdal_sys::OGRwkbGeometryType::wkbPoint,
+        ..Default::default()
+    })?;
+    layer.create_defn_fields(&[("category", OGRFieldType::OFTString)])?;
+    let fields = ["category"];
+
+    let total: usize = categories.iter().map(|(_, v)| v.len()).sum();
+    let mut progress = 0;
+    for (cat, list) in categories {
+        for pt in list {
+            let mut geom = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbPoint)?;
+            geom.add_point_2d(pt.coord2());
+            layer.create_feature_fields(
+                geom,
+                &fields,
+                &[FieldValue::StringValue(cat.to_string())],
+            )?;
+            if verbose {
+                progress += 1;
+                println!("Writing Features: {}", progress * 100 / total);
+            }
+        }
+    }
+    Ok(())
 }

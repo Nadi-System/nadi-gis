@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::types::Point2D;
 use anyhow::Context;
 use clap::Args;
+use gdal::spatial_ref::SpatialRef;
 use gdal::vector::{
     Defn, Feature, FieldDefn, FieldValue, Geometry, Layer, LayerAccess, LayerOptions, OGRFieldType,
 };
@@ -81,51 +82,92 @@ impl CliAction for CliArgs {
                 .context("Driver not found for the output filename")?
         };
 
+        let lyr_name = self
+            .output
+            .1
+            .as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or(&"ordered-stream");
+        let sref = streams_lyr.spatial_ref();
         let mut out_data = driver.create_vector_only(&self.output.0)?;
 
-        let layer = out_data.create_layer(LayerOptions {
-            name: self
-                .output
-                .1
-                .as_ref()
-                .unwrap_or(&"ordered-stream".to_string()),
-            srs: streams_lyr.spatial_ref().as_ref(),
-            ty: gdal_sys::OGRwkbGeometryType::wkbLineString,
-            ..Default::default()
-        })?;
-
-        let fields_defn = streams_lyr
-            .defn()
-            .fields()
-            .map(|field| (field.name(), field.field_type(), field.width()))
-            .collect::<Vec<_>>();
-        for fd in &fields_defn {
-            let field_defn = FieldDefn::new(&fd.0, fd.1)?;
-            field_defn.set_width(fd.2);
-            field_defn.add_to_layer(&layer)?;
-        }
-
-        FieldDefn::new("order", OGRFieldType::OFTInteger64)?.add_to_layer(&layer)?;
-        let defn = Defn::from_layer(&layer);
         let order: Vec<i64> = points.iter().map(|(a, b)| order[&(a, b)] as i64).collect();
-        let total = streams_lyr.feature_count();
-        let mut progress = 0;
-        for (i, feat) in streams_lyr.features().enumerate() {
-            let mut ft = Feature::new(&defn)?;
-            ft.set_geometry(feat.geometry().unwrap().clone())?;
-            for fd in &fields_defn {
-                if let Some(value) = feat.field(&fd.0)? {
-                    ft.set_field(&fd.0, &value)?;
-                }
-            }
-            ft.set_field("order", &FieldValue::Integer64Value(order[i]))?;
-            ft.create(&layer)?;
+        let mut trans = false;
+        // have to use trans flag here because of borrow rule;
+        // uses transaction when it can to speed up the process.
+        if let Ok(mut txn) = out_data.start_transaction() {
+            write_layer(
+                &order,
+                &mut txn,
+                &mut streams_lyr,
+                lyr_name,
+                sref.as_ref(),
+                self.verbose,
+            )?;
+            txn.commit()?;
+            trans = true;
+        };
 
-            if self.verbose {
-                progress += 1;
-                println!("Writing Features: {}", progress * 100 / total);
-            }
+        if !trans {
+            write_layer(
+                &order,
+                &mut out_data,
+                &mut streams_lyr,
+                lyr_name,
+                sref.as_ref(),
+                self.verbose,
+            )?;
         }
+
         Ok(())
     }
+}
+
+fn write_layer(
+    order: &[i64],
+    out_data: &mut Dataset,
+    streams_lyr: &mut Layer,
+    lyr_name: &str,
+    sref: Option<&SpatialRef>,
+    verbose: bool,
+) -> anyhow::Result<()> {
+    let layer = out_data.create_layer(LayerOptions {
+        name: lyr_name,
+        srs: sref,
+        ty: gdal_sys::OGRwkbGeometryType::wkbLineString,
+        ..Default::default()
+    })?;
+
+    let fields_defn = streams_lyr
+        .defn()
+        .fields()
+        .map(|field| (field.name(), field.field_type(), field.width()))
+        .collect::<Vec<_>>();
+    for fd in &fields_defn {
+        let field_defn = FieldDefn::new(&fd.0, fd.1)?;
+        field_defn.set_width(fd.2);
+        field_defn.add_to_layer(&layer)?;
+    }
+
+    FieldDefn::new("order", OGRFieldType::OFTInteger64)?.add_to_layer(&layer)?;
+    let defn = Defn::from_layer(&layer);
+    let total = streams_lyr.feature_count();
+    let mut progress = 0;
+    for (i, feat) in streams_lyr.features().enumerate() {
+        let mut ft = Feature::new(&defn)?;
+        ft.set_geometry(feat.geometry().unwrap().clone())?;
+        for fd in &fields_defn {
+            if let Some(value) = feat.field(&fd.0)? {
+                ft.set_field(&fd.0, &value)?;
+            }
+        }
+        ft.set_field("order", &FieldValue::Integer64Value(order[i]))?;
+        ft.create(&layer)?;
+
+        if verbose {
+            progress += 1;
+            println!("Writing Features: {}", progress * 100 / total);
+        }
+    }
+    Ok(())
 }
