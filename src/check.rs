@@ -18,6 +18,9 @@ pub struct CliArgs {
     /// Output driver [default: based on file extension]
     #[arg(short, long)]
     driver: Option<String>,
+    /// Overwrite the output file if it exists
+    #[arg(short = 'O', long)]
+    overwrite: bool,
     /// Output file
     #[arg(short, long, value_parser=parse_new_layer)]
     output: Option<(PathBuf, Option<String>)>,
@@ -95,14 +98,8 @@ impl CliAction for CliArgs {
         ];
 
         if let Some((filename, lyr)) = &self.output {
-            let driver = if let Some(d) = &self.driver {
-                DriverManager::get_driver_by_name(d)?
-            } else {
-                DriverManager::get_output_driver_for_dataset_name(&filename, DriverType::Vector)
-                    .context("Driver not found for the output filename")?
-            };
-            let lyr_name = lyr.as_deref().unwrap_or("branches");
-            let mut out_data = driver.create_vector_only(&filename)?;
+            let mut out_data = gdal_update_or_create(&filename, self.driver, self.overwrite)?;
+            let lyr_name = lyr.as_deref().unwrap_or("nodes");
             let sref = streams_lyr.spatial_ref();
 
             let mut trans = false;

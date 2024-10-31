@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Context;
 use clap::Args;
@@ -68,4 +68,28 @@ pub fn get_geometries(
             Ok((name, geom.to_owned()))
         })
         .collect()
+}
+
+pub fn gdal_update_or_create<P: AsRef<Path>>(
+    filepath: P,
+    driver: Option<String>,
+    overwrite: bool,
+) -> anyhow::Result<Dataset> {
+    if !overwrite && filepath.as_ref().exists() {
+        let open_flags = gdal::GdalOpenFlags::GDAL_OF_UPDATE;
+        let op = gdal::DatasetOptions {
+            open_flags,
+            ..Default::default()
+        };
+        Ok(Dataset::open_ex(filepath, op)?)
+    } else {
+        let driver = if let Some(d) = &driver {
+            DriverManager::get_driver_by_name(d)?
+        } else {
+            DriverManager::get_output_driver_for_dataset_name(&filepath, gdal::DriverType::Vector)
+                .context("Driver not found for the output filename")?
+        };
+
+        Ok(driver.create_vector_only(filepath)?)
+    }
 }

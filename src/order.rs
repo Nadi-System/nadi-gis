@@ -22,6 +22,9 @@ pub struct CliArgs {
     /// Print progress
     #[arg(short, long)]
     verbose: bool,
+    /// Overwrite the output file if it exists
+    #[arg(short = 'O', long)]
+    overwrite: bool,
 
     /// Streams vector file with streams network
     #[arg(value_parser=parse_layer, value_name="STREAMS_FILE[:LAYER]")]
@@ -75,21 +78,10 @@ impl CliAction for CliArgs {
             }
         }
 
-        let driver = if let Some(d) = &self.driver {
-            DriverManager::get_driver_by_name(d)?
-        } else {
-            DriverManager::get_output_driver_for_dataset_name(&self.output.0, DriverType::Vector)
-                .context("Driver not found for the output filename")?
-        };
-
-        let lyr_name = self
-            .output
-            .1
-            .as_ref()
-            .map(|s| s.as_str())
-            .unwrap_or(&"ordered-stream");
+        let lyr_name = self.output.1.as_deref().unwrap_or("ordered-stream");
         let sref = streams_lyr.spatial_ref();
-        let mut out_data = driver.create_vector_only(&self.output.0)?;
+
+        let mut out_data = gdal_update_or_create(&self.output.0, self.driver, self.overwrite)?;
 
         let order: Vec<i64> = points.iter().map(|(a, b)| order[&(a, b)] as i64).collect();
         let mut trans = false;
