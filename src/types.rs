@@ -34,6 +34,14 @@ impl Point2D {
     pub fn coord2(&self) -> (f64, f64) {
         (self.x.into_inner(), self.y.into_inner())
     }
+
+    pub fn sq_dist(&self, other: &Self) -> f64 {
+        (self.x - other.x).powi(2) + (self.y - other.y).powi(2)
+    }
+
+    pub fn dist(&self, other: &Self) -> f64 {
+        self.sq_dist(other).sqrt()
+    }
 }
 
 impl std::fmt::Display for Point2D {

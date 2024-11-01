@@ -64,6 +64,8 @@ subcommands! {
     /// main branch will get the upstream stream order, other branches
     /// will start from 0.
     order Order,
+    /// Find the network information from streams file between points
+    network Network,
 }
 
 #[derive(Parser)]

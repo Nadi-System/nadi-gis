@@ -72,7 +72,7 @@ pub fn get_geometries(
 
 pub fn gdal_update_or_create<P: AsRef<Path>>(
     filepath: P,
-    driver: Option<String>,
+    driver: &Option<String>,
     overwrite: bool,
 ) -> anyhow::Result<Dataset> {
     if !overwrite && filepath.as_ref().exists() {
@@ -83,7 +83,7 @@ pub fn gdal_update_or_create<P: AsRef<Path>>(
         };
         Ok(Dataset::open_ex(filepath, op)?)
     } else {
-        let driver = if let Some(d) = &driver {
+        let driver = if let Some(d) = driver {
             DriverManager::get_driver_by_name(d)?
         } else {
             DriverManager::get_output_driver_for_dataset_name(&filepath, gdal::DriverType::Vector)
@@ -92,4 +92,30 @@ pub fn gdal_update_or_create<P: AsRef<Path>>(
 
         Ok(driver.create_vector_only(filepath)?)
     }
+}
+
+pub fn check_spatial_ref(points: &Layer, streams: &Layer) -> Result<(), ()> {
+    match (
+        points.spatial_ref().and_then(|r| r.to_proj4().ok()),
+        streams.spatial_ref().and_then(|r| r.to_proj4().ok()),
+    ) {
+        (Some(p), Some(s)) => {
+            if p != s {
+                eprintln!("Spatial reference mismatch.");
+                eprintln!("{:?} {:?}", p, s);
+                // TODO proper error return
+                return Err(());
+            }
+        }
+        (Some(_), None) => {
+            eprintln!("Streams layer doesn't have spatial reference");
+        }
+        (None, Some(_)) => {
+            eprintln!("Points layer doesn't have spatial reference");
+        }
+        (None, None) => {
+            eprintln!("Streams and Point layers don't have spatial reference");
+        }
+    }
+    Ok(())
 }

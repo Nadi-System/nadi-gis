@@ -98,7 +98,7 @@ impl CliAction for CliArgs {
         ];
 
         if let Some((filename, lyr)) = &self.output {
-            let mut out_data = gdal_update_or_create(&filename, self.driver, self.overwrite)?;
+            let mut out_data = gdal_update_or_create(&filename, &self.driver, self.overwrite)?;
             let lyr_name = lyr.as_deref().unwrap_or("nodes");
             let sref = streams_lyr.spatial_ref();
 

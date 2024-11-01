@@ -81,7 +81,7 @@ impl CliAction for CliArgs {
         let lyr_name = self.output.1.as_deref().unwrap_or("ordered-stream");
         let sref = streams_lyr.spatial_ref();
 
-        let mut out_data = gdal_update_or_create(&self.output.0, self.driver, self.overwrite)?;
+        let mut out_data = gdal_update_or_create(&self.output.0, &self.driver, self.overwrite)?;
 
         let order: Vec<i64> = points.iter().map(|(a, b)| order[&(a, b)] as i64).collect();
         let mut trans = false;
