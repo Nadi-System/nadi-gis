@@ -119,3 +119,22 @@ pub fn check_spatial_ref(points: &Layer, streams: &Layer) -> Result<(), ()> {
     }
     Ok(())
 }
+
+pub fn delete_layer(dataset: &mut Dataset, lyr: &str) -> anyhow::Result<()> {
+    let lyr = dataset
+        .layers()
+        .enumerate()
+        .filter(|l| l.1.name() == lyr)
+        .next()
+        .context("Layer not found")?
+        .0;
+    let err =
+        unsafe { gdal_sys::GDALDatasetDeleteLayer(dataset.c_dataset(), lyr as std::ffi::c_int) };
+    if err != gdal_sys::OGRErr::OGRERR_NONE {
+        Err(gdal::errors::GdalError::OgrError {
+            err,
+            method_name: "GDALDatasetDeleteLayer",
+        })?;
+    }
+    Ok(())
+}

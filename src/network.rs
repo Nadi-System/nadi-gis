@@ -58,6 +58,9 @@ pub struct CliArgs {
     /// Print progress
     #[arg(short, long)]
     verbose: bool,
+    /// if provided save the movement of point during snapping in a file
+    #[arg(short, long, value_parser=parse_new_layer)]
+    snap_line: Option<(PathBuf, Option<String>)>,
     /// Nodes file, if provided save the nodes of the graph as points with nodeid
     #[arg(short = 'N', long, value_parser=parse_new_layer)]
     nodes: Option<(PathBuf, Option<String>)>,
@@ -307,21 +310,24 @@ impl CliArgs {
         let all_points = RTree::bulk_load(pts);
         let sq_threshold = self.threshold.map(|t| t.powi(2));
 
-        let mut err = vec![];
+        let mut err = HashSet::new();
+        let mut snapped = Vec::with_capacity(points.len());
         for (k, p) in points {
             let place = match all_points.nearest_neighbor(&p.coord2()) {
                 Some(p) => p,
                 None => {
+                    // only happens if the tree is empty I think (doc not present)
                     eprintln!("{:?}", p.coord2());
                     eprintln!("{:?}", all_points.iter().next());
-                    err.push(k);
+                    err.insert(k);
                     continue;
                 }
             };
+            snapped.push((k.clone(), p.coord2(), *place));
             let min_pt = Point2D::new2(*place).unwrap();
             if let Some(t) = sq_threshold {
                 if p.sq_dist(&min_pt) > t {
-                    err.push(k);
+                    err.insert(k);
                     continue;
                 }
             }
@@ -339,10 +345,60 @@ impl CliArgs {
         if self.verbose {
             println!();
         }
+        if let Some(out) = &self.snap_line {
+            let mut out_data = gdal_update_or_create(&out.0, &self.driver, self.overwrite)?;
+
+            let save = |d: &mut Dataset| -> anyhow::Result<()> {
+                let lyr_name = out.1.as_deref().unwrap_or("snap-line");
+                // if layer is there and we can delete it, delete it
+                delete_layer(d, lyr_name).ok();
+                let mut layer = d.create_layer(LayerOptions {
+                    name: lyr_name,
+                    ty: gdal_sys::OGRwkbGeometryType::wkbLineString,
+                    ..Default::default()
+                })?;
+                gdal::vector::FieldDefn::new("name", OGRFieldType::OFTString)?
+                    .add_to_layer(&layer)?;
+                gdal::vector::FieldDefn::new("error", OGRFieldType::OFTString)?
+                    .add_to_layer(&layer)?;
+                for (name, start, end) in &snapped {
+                    let mut geom = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbLineString)?;
+                    geom.add_point_2d(*start);
+                    geom.add_point_2d(*end);
+                    layer.create_feature_fields(
+                        geom,
+                        &["name", "error"],
+                        &[
+                            gdal::vector::FieldValue::StringValue(name.to_string()),
+                            gdal::vector::FieldValue::StringValue(
+                                if err.contains(name) { "yes" } else { "no" }.to_string(),
+                            ),
+                        ],
+                    )?;
+                }
+                Ok(())
+            };
+
+            let mut trans = false;
+            // have to use trans flag here because of borrow rule;
+            // uses transaction when it can to speed up the process.
+            if let Ok(mut txn) = out_data.start_transaction() {
+                save(&mut txn)?;
+                txn.commit()?;
+                trans = true;
+            };
+            if !trans {
+                save(&mut out_data)?;
+            }
+        }
         if !err.is_empty() {
             Err(anyhow::Error::msg(format!(
                 "Errors on snapping points to streams: [{}]",
-                err.join(", ")
+                if self.snap_line.is_none() {
+                    err.into_iter().join(", ")
+                } else {
+                    format!("{} Nodes", err.len())
+                }
             )))
         } else {
             Ok(points_closest)
