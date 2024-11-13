@@ -110,7 +110,7 @@ impl CliArgs {
             }
         }
 
-        let mut edges: HashMap<&str, &str> = HashMap::new();
+        let mut str_edges: HashMap<&str, &str> = HashMap::new();
         // if any points reach this Point2D, connect them here
         let points_nodes: HashMap<&Point2D, (&str, &str)> = points_temp_dir
             .into_iter()
@@ -118,8 +118,8 @@ impl CliArgs {
                 v.sort();
                 let n = v.len();
                 if n > 1 {
-                    for i in 1..(n - 1) {
-                        edges.insert(v[i - 1], v[i]);
+                    for i in 1..n {
+                        str_edges.insert(v[i - 1], v[i]);
                     }
                 }
                 (k, (v[0], v[n - 1]))
@@ -171,7 +171,7 @@ impl CliArgs {
                 self.endpoints,
             );
             if let Some(o) = outlet {
-                edges.insert(points_nodes[pt].1, points_nodes[o].0);
+                str_edges.insert(points_nodes[pt].1, points_nodes[o].0);
             } else {
                 outlets.push(pt);
             }
@@ -201,11 +201,11 @@ impl CliArgs {
         if let Some(outfile) = &self.output {
             let file = File::create(outfile)?;
             let mut writer = BufWriter::new(file);
-            for (k, v) in edges {
+            for (k, v) in str_edges {
                 writeln!(writer, "{k} -> {v}")?;
             }
         } else {
-            for (k, v) in edges {
+            for (k, v) in str_edges {
                 println!("{k} -> {v}");
             }
         }

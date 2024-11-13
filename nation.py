@@ -12,7 +12,9 @@ gdf.to_file("nation/usgs.gpkg")
 df = gpd.read_file("nation/usgs.gpkg")
 all(df.groupby("SiteNumber").geometry.agg(list).map(lambda x: all([x[0] == y for y in x])))
 # after making sure all duplicate site numbers have same geometry:
-df.groupby("SiteNumber").first().reset_index().to_file("nation/usgs-uniq.gpkg")
+usgs = df.groupby("SiteNumber").first().reset_index()
+usgs.SiteNumber = usgs.SiteNumber.map(lambda s: f'{s:08}')
+usgs.to_file("nation/usgs-uniq.gpkg")
 
 ## NID
 df = gpd.read_file("nation/nid.gpkg")
