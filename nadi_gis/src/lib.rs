@@ -7,7 +7,7 @@ mod nadi_gis {
     use gdal::{Dataset, DriverManager, DriverType};
     use nadi_core::abi_stable::std_types::{RSome, RString};
     use nadi_core::anyhow::{Context, Result};
-    use nadi_core::attrs::{Date, DateTime, FromAttribute, FromAttributeRelaxed};
+    use nadi_core::attrs::{Date, DateTime, FromAttribute, FromAttributeRelaxed, HasAttributes};
     use nadi_core::nadi_plugin::network_func;
     use nadi_core::prelude::*;
     use std::collections::{HashMap, HashSet};
@@ -83,7 +83,7 @@ mod nadi_gis {
                         None
                     }
                 });
-            n.lock().attrs_mut().extend(attrs);
+            n.lock().attr_map_mut().extend(attrs);
         }
         Ok(())
     }
@@ -194,7 +194,7 @@ mod nadi_gis {
             let node_geom = Geometry::from_wkt(&node_geom)?;
             let feat_fields: Vec<(&str, FieldValue)> = fields
                 .iter()
-                .filter_map(|(k, (_, f))| n.attr(k).map(f).map(|v| (k.as_str(), v)))
+                .filter_map(|(k, (_, func))| Some((k.as_str(), func(n.attr(k)?))))
                 .collect();
 
             let field_names: Vec<&str> = feat_fields.iter().map(|(k, _)| *k).collect();
