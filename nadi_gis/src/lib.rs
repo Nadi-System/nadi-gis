@@ -14,15 +14,25 @@ mod nadi_gis {
     use std::path::PathBuf;
 
     /// Load node attributes from a GIS file
+    ///
+    /// The function reads a GIS file in any format (CSV, GPKG, SHP,
+    /// JSON, etc) and loads their fields as attributes to the nodes.
     #[network_func(geometry = "GEOM", ignore = "", sanitize = true, err_no_node = false)]
     fn gis_load_attrs(
         net: &mut Network,
+        /// GIS file to load (can be any format GDAL can understand)
         file: PathBuf,
+        /// Field in the GIS file corresponding to node name
         node: String,
+        /// layer of the GIS file, first one picked by default
         layer: Option<String>,
+        /// Attribute to save the GIS geometry in
         geometry: String,
+        /// Field names separated by comma, to ignore
         ignore: String,
+        /// sanitize the name of the fields
         sanitize: bool,
+        /// Error if all nodes are not found in the GIS file
         err_no_node: bool,
     ) -> Result<()> {
         let data = Dataset::open(file)?;
