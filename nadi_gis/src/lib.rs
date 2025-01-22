@@ -8,6 +8,7 @@ mod nadi_gis {
     use nadi_core::abi_stable::std_types::{RSome, RString};
     use nadi_core::anyhow::{Context, Result};
     use nadi_core::attrs::{Date, DateTime, FromAttribute, FromAttributeRelaxed, HasAttributes};
+    use nadi_core::functions::Propagation;
     use nadi_core::nadi_plugin::network_func;
     use nadi_core::prelude::*;
     use std::collections::{HashMap, HashSet};
@@ -102,6 +103,7 @@ mod nadi_gis {
     #[network_func(layer = "network")]
     fn gis_save_connections(
         net: &mut Network,
+        #[prop] prop: &Propagation,
         file: PathBuf,
         geometry: String,
         driver: Option<String>,
@@ -126,7 +128,10 @@ mod nadi_gis {
             ("end", OGRFieldType::OFTString),
         ])?;
         let fields = ["start", "end"];
-        for node in net.nodes() {
+        for node in net
+            .nodes_propagation(prop)
+            .map_err(nadi_core::anyhow::Error::msg)?
+        {
             let n = node.lock();
             if let RSome(out) = n.output() {
                 let start = String::try_from_attr(
@@ -167,6 +172,7 @@ mod nadi_gis {
     #[network_func(attrs=HashMap::new(), layer="nodes")]
     fn gis_save_nodes(
         net: &mut Network,
+        #[prop] prop: &Propagation,
         file: PathBuf,
         geometry: String,
         attrs: HashMap<String, String>,
@@ -194,7 +200,10 @@ mod nadi_gis {
         let field_types: Vec<(&str, u32)> = fields.iter().map(|(k, v)| (k.as_str(), v.0)).collect();
         // saving shp means field names will be shortened, it'll error later, how do we fix it?
         layer.create_defn_fields(&field_types)?;
-        for node in net.nodes() {
+        for node in net
+            .nodes_propagation(prop)
+            .map_err(nadi_core::anyhow::Error::msg)?
+        {
             let n = node.lock();
             let node_geom = String::try_from_attr(
                 n.attr(&geometry)
