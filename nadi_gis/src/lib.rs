@@ -195,8 +195,9 @@ mod nadi_gis {
         })?;
         let fields: Vec<(String, (u32, Attr2FieldValue))> = attrs
             .into_iter()
-            .map(|(k, v)| (k, type_name_to_field(&v)))
-            .collect();
+            .map(|(k, v)| Ok((k, type_name_to_field(&v)?)))
+            .collect::<Result<_, String>>()
+            .map_err(nadi_core::anyhow::Error::msg)?;
         let field_types: Vec<(&str, u32)> = fields.iter().map(|(k, v)| (k.as_str(), v.0)).collect();
         // saving shp means field names will be shortened, it'll error later, how do we fix it?
         layer.create_defn_fields(&field_types)?;
@@ -229,8 +230,8 @@ mod nadi_gis {
 
     type Attr2FieldValue = fn(&Attribute) -> FieldValue;
 
-    fn type_name_to_field(name: &str) -> (u32, Attr2FieldValue) {
-        match name {
+    fn type_name_to_field(name: &str) -> Result<(u32, Attr2FieldValue), String> {
+        Ok(match name {
             // This is a string that can be parsed back into correct Attribute
             "Attribute" => (OGRFieldType::OFTString, |a| {
                 FieldValue::StringValue(a.to_string())
@@ -261,7 +262,11 @@ mod nadi_gis {
                 FieldValue::DateTimeValue(val.into())
             }),
             // There are other types supported by gdal, that could exist as Attribute, but let's ignore them
-            _ => panic!("Not supported. Use String, Integer, Float, Date, DateTime or Attribute"),
-        }
+            t => {
+                return Err(format!(
+                "Type {t} Not supported. Use String, Integer, Float, Date, DateTime or Attribute"
+            ))
+            }
+        })
     }
 }
