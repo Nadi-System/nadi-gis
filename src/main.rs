@@ -40,6 +40,8 @@ macro_rules! subcommands{
 // case change in macro would have made it nice, but we'll just repeat
 // it, other than that, perfect
 subcommands! {
+    /// Download the National Inventory of Dams dataset
+    nid Nid,
     /// Download data from USGS NHD+
     usgs Usgs,
     /// Show list of layers in a GIS file

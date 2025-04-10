@@ -22,6 +22,9 @@ pub struct CliArgs {
         hide_possible_values = true
     )]
     data: Vec<GeoInfo>,
+    /// Display the url and exit (no download)
+    #[arg(short, long, action)]
+    url: bool,
     #[arg(short, long, value_hint=ValueHint::DirPath, default_value=".")]
     output_dir: PathBuf,
 }
@@ -30,7 +33,11 @@ impl CliAction for CliArgs {
     fn run(self) -> anyhow::Result<()> {
         for site in self.site_no {
             for data in &self.data {
-                data.download(&site, &self.output_dir);
+                if self.url {
+                    println!("{}", data.usgs_url(&site));
+                } else {
+                    data.download(&site, &self.output_dir);
+                }
             }
         }
         Ok(())
@@ -47,31 +54,46 @@ pub enum GeoInfo {
     Tributories,
     #[value(alias = "b")]
     Basin,
+    #[value(alias = "n")]
+    NwisSite,
 }
 
+// Available data can be seen from links like this here:
+// https://api.water.usgs.gov/nldi/linked-data/nwissite/USGS-03227500/navigation/UT?f=json
+
 impl GeoInfo {
-    pub fn usgs_abbr(&self) -> &str {
+    pub fn usgs_query(&self) -> &str {
         match self {
-            Self::Upstream => "navigate/UM",
-            Self::Downstream => "navigate/DM",
-            Self::Tributories => "navigate/UT",
-            Self::Basin => "basin",
+            Self::Upstream => "navigate/UM?f=json",
+            Self::NwisSite => "navigate/UT/nwissite?f=json",
+            Self::Downstream => "navigate/DM?f=json",
+            Self::Tributories => "navigate/UT?f=json",
+            Self::Basin => "basin?f=json",
         }
     }
 
+    pub fn filename(&self, site_no: &str) -> String {
+        format!(
+            "{site_no}_{}.json",
+            match self {
+                Self::Upstream => "upstream",
+                Self::Downstream => "downstream",
+                Self::Tributories => "tributaries",
+                Self::Basin => "basin",
+                Self::NwisSite => "nwissites",
+            }
+        )
+    }
+
     pub fn usgs_url(&self, site_no: &str) -> String {
-        let dt = self.usgs_abbr();
-        format!("https://labs.waterdata.usgs.gov/api/nldi/linked-data/nwissite/USGS-{site_no}/{dt}?f=json")
+        let query = self.usgs_query();
+        format!("https://api.water.usgs.gov/nldi/linked-data/nwissite/USGS-{site_no}/{query}")
     }
 
     pub fn download(&self, site_no: &str, dir: &PathBuf) {
         let url = self.usgs_url(site_no);
+        let filepath = dir.join(self.filename(site_no));
         let bytes = reqwest::blocking::get(url).unwrap().bytes().unwrap();
-        let filepath = dir.join(format!(
-            "{}_{}.json",
-            site_no,
-            self.usgs_abbr().split('/').last().unwrap()
-        ));
         let mut file = File::create(filepath).unwrap();
         file.write_all(&bytes).unwrap();
     }
