@@ -45,6 +45,12 @@ pub fn get_geometries(
     layer: &mut Layer,
     field: &Option<String>,
 ) -> Result<Vec<(String, Geometry)>, anyhow::Error> {
+    // TODO take X,Y possible names as Vec<String>
+    let x_field = layer.defn().field_index("lon");
+    let y_field = layer.defn().field_index("lat");
+    let name_field = field
+        .as_ref()
+        .and_then(|f| layer.defn().field_index(f).ok());
     layer
         .features()
         .enumerate()
@@ -52,16 +58,15 @@ pub fn get_geometries(
             let geom = match f.geometry() {
                 Some(g) => g.clone(),
                 None => {
-                    // TODO take X,Y possible names as Vec<String>
-                    let x = f.field_as_double_by_name("lon")?.unwrap();
-                    let y = f.field_as_double_by_name("lat")?.unwrap();
+                    let x = f.field_as_double(x_field.clone()?)?.unwrap();
+                    let y = f.field_as_double(y_field.clone()?)?.unwrap();
                     let mut pt = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbPoint)?;
                     pt.add_point((x, y, 0.0));
                     pt
                 }
             };
-            let name = if let Some(name) = field {
-                f.field_as_string_by_name(name)?.unwrap_or("".to_string())
+            let name = if let Some(namef) = name_field {
+                f.field_as_string(namef)?.unwrap_or(format!("Unnamed_{i}"))
             } else {
                 i.to_string()
             };
