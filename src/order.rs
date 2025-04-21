@@ -142,18 +142,23 @@ fn write_layer(
     }
 
     FieldDefn::new("order", OGRFieldType::OFTInteger64)?.add_to_layer(&layer)?;
+    let fid = layer
+        .defn()
+        .field_index("order")
+        .expect("Just added order field");
     let defn = Defn::from_layer(&layer);
     let total = streams_lyr.feature_count();
     let mut progress = 0;
     for (i, feat) in streams_lyr.features().enumerate() {
         let mut ft = Feature::new(&defn)?;
         ft.set_geometry(feat.geometry().unwrap().clone())?;
-        for fd in &fields_defn {
-            if let Some(value) = feat.field(&fd.0)? {
-                ft.set_field(&fd.0, &value)?;
+        // TODO: do a proper field copy
+        for (j, _fd) in fields_defn.iter().enumerate() {
+            if let Some(value) = feat.field(j)? {
+                ft.set_field(j, &value)?;
             }
         }
-        ft.set_field("order", &FieldValue::Integer64Value(order[i]))?;
+        ft.set_field_integer64(fid, order[i])?;
         ft.create(&layer)?;
 
         if verbose {

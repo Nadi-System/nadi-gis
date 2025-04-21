@@ -6,7 +6,9 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context};
 use clap::Args;
-use gdal::vector::{FieldValue, Geometry, Layer, LayerAccess, LayerOptions, OGRFieldType};
+use gdal::vector::{
+    Defn, Feature, FieldValue, Geometry, Layer, LayerAccess, LayerOptions, OGRFieldType,
+};
 use gdal::{Dataset, Driver, DriverManager, GdalOpenFlags, Metadata};
 
 use itertools::Itertools;
@@ -259,6 +261,13 @@ impl CliArgs {
         if self.verbose {
             println!();
         }
+        // TODO take X,Y possible names as Vec<String>
+        let x_field = layer.defn().field_index("lon");
+        let y_field = layer.defn().field_index("lat");
+        let name_field = self
+            .points_field
+            .as_ref()
+            .and_then(|f| layer.defn().field_index(f).ok());
         layer
             .features()
             .enumerate()
@@ -266,9 +275,9 @@ impl CliArgs {
                 let geom = match f.geometry() {
                     Some(g) => Point2D::new3(g.get_point(0)),
                     None => {
-                        // TODO take X,Y possible names as Vec<String>
-                        let x = f.field_as_double_by_name("lon")?;
-                        let y = f.field_as_double_by_name("lat")?;
+                        // TODO: make it check for geometry column and get this sorted out
+                        let x = f.field_as_double(x_field.clone()?)?;
+                        let y = f.field_as_double(y_field.clone()?)?;
                         if let (Some(x), Some(y)) = (x, y) {
                             Point2D::new2((x, y))
                         } else {
@@ -276,12 +285,11 @@ impl CliArgs {
                         }
                     }
                 }?;
-                let name = if let Some(name) = &self.points_field {
-                    f.field_as_string_by_name(name)?.unwrap_or("".to_string())
+                let name = if let Some(namef) = name_field {
+                    f.field_as_string(namef)?.unwrap_or(format!("Unnamed_{i}"))
                 } else {
                     i.to_string()
                 };
-
                 if self.verbose {
                     progress += 1;
                     print!(
@@ -357,24 +365,20 @@ impl CliArgs {
                     ty: gdal_sys::OGRwkbGeometryType::wkbLineString,
                     ..Default::default()
                 })?;
-                gdal::vector::FieldDefn::new("name", OGRFieldType::OFTString)?
-                    .add_to_layer(&layer)?;
-                gdal::vector::FieldDefn::new("error", OGRFieldType::OFTString)?
-                    .add_to_layer(&layer)?;
+                layer.create_defn_fields(&[
+                    ("name", OGRFieldType::OFTString),
+                    ("error", OGRFieldType::OFTString),
+                ])?;
+                let defn = Defn::from_layer(&layer);
                 for (name, start, end) in &snapped {
                     let mut geom = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbLineString)?;
                     geom.add_point_2d(*start);
                     geom.add_point_2d(*end);
-                    layer.create_feature_fields(
-                        geom,
-                        &["name", "error"],
-                        &[
-                            gdal::vector::FieldValue::StringValue(name.to_string()),
-                            gdal::vector::FieldValue::StringValue(
-                                if err.contains(name) { "yes" } else { "no" }.to_string(),
-                            ),
-                        ],
-                    )?;
+                    let mut ft = Feature::new(&defn)?;
+                    ft.set_geometry(geom)?;
+                    ft.set_field_string(0, name)?;
+                    ft.set_field_string(1, if err.contains(name) { "yes" } else { "no" })?;
+                    ft.create(&mut layer)?;
                 }
                 Ok(())
             };
@@ -421,7 +425,9 @@ fn read_stream_points(
     for f in layer.features() {
         match f.geometry() {
             Some(g) => {
-                streams.append(&mut edges_from_pts(&g.get_point_vec(), take));
+                let mut pts = Vec::new();
+                g.get_points(&mut pts);
+                streams.append(&mut edges_from_pts(&pts, take));
             }
             None => return Err(anyhow::Error::msg("No geometry found in the layer")),
         };

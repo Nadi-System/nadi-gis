@@ -7,7 +7,9 @@ use crate::utils::*;
 use anyhow::Context;
 use clap::Args;
 use gdal::spatial_ref::SpatialRef;
-use gdal::vector::{FieldValue, Geometry, Layer, LayerAccess, LayerOptions, OGRFieldType};
+use gdal::vector::{
+    Defn, Feature, FieldValue, Geometry, Layer, LayerAccess, LayerOptions, OGRFieldType,
+};
 use gdal::{Dataset, Driver, DriverManager, DriverType, GdalOpenFlags, Metadata};
 
 #[derive(Args)]
@@ -150,19 +152,18 @@ fn write_output(
         ..Default::default()
     })?;
     layer.create_defn_fields(&[("category", OGRFieldType::OFTString)])?;
-    let fields = ["category"];
 
     let total: usize = categories.iter().map(|(_, v)| v.len()).sum();
     let mut progress = 0;
+    let defn = Defn::from_layer(&layer);
     for (cat, list) in categories {
         for pt in list {
             let mut geom = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbPoint)?;
             geom.add_point_2d(pt.coord2());
-            layer.create_feature_fields(
-                geom,
-                &fields,
-                &[FieldValue::StringValue(cat.to_string())],
-            )?;
+            let mut ft = Feature::new(&defn)?;
+            ft.set_geometry(geom)?;
+            ft.set_field_string(0, cat)?;
+            ft.create(&mut layer)?;
             if verbose {
                 progress += 1;
                 println!("Writing Features: {}", progress * 100 / total);
