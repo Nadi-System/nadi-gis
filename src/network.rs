@@ -67,10 +67,10 @@ pub struct CliArgs {
     #[arg(short = 'N', long, value_parser=parse_new_layer)]
     nodes: Option<(PathBuf, Option<String>)>,
     /// Points file with points of interest
-    #[arg(value_parser=parse_layer, value_name="POINTS_FILE[:LAYER]")]
+    #[arg(value_parser=parse_layer, value_name="POINTS_FILE[::LAYER]")]
     points: (PathBuf, String),
     /// Streams vector file with streams network
-    #[arg(value_parser=parse_layer, value_name="STREAMS_FILE[:LAYER]")]
+    #[arg(value_parser=parse_layer, value_name="STREAMS_FILE[::LAYER]")]
     streams: (PathBuf, String),
 }
 

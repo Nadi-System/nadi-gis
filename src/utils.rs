@@ -7,7 +7,7 @@ use gdal::vector::{FieldValue, Geometry, Layer, LayerAccess, LayerOptions, OGRFi
 use gdal::{Dataset, Driver, DriverManager, GdalOpenFlags, Metadata};
 
 pub fn parse_new_layer(arg: &str) -> Result<(PathBuf, Option<String>), anyhow::Error> {
-    if let Some((path, layer)) = arg.split_once(':') {
+    if let Some((path, layer)) = arg.split_once("::") {
         Ok((PathBuf::from(path), Some(layer.to_string())))
     } else {
         Ok((PathBuf::from(arg), None))
@@ -15,7 +15,7 @@ pub fn parse_new_layer(arg: &str) -> Result<(PathBuf, Option<String>), anyhow::E
 }
 
 pub fn parse_layer(arg: &str) -> Result<(PathBuf, String), anyhow::Error> {
-    if let Some((path, layer)) = arg.split_once(':') {
+    if let Some((path, layer)) = arg.split_once("::") {
         let data = Dataset::open(path)?;
         if data.layer_by_name(layer).is_err() {
             Err(std::io::Error::new(
@@ -32,7 +32,7 @@ pub fn parse_layer(arg: &str) -> Result<(PathBuf, String), anyhow::Error> {
             let layer = data.layer(0)?;
             Ok((PathBuf::from(&arg), layer.name()))
         } else {
-            eprintln!("Provide a layer name to choose layer \"FILENAME:LAYERNAME\"");
+            eprintln!("Provide a layer name to choose layer \"FILENAME::LAYERNAME\"");
             eprintln!("Available Layers:");
             data.layers().for_each(|l| eprintln!("  {}", l.name()));
             let layer = data.layer(0)?;
