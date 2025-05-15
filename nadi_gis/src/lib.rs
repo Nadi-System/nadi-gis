@@ -103,11 +103,11 @@ mod nadi_gis {
     #[network_func(layer = "network")]
     fn gis_save_connections(
         net: &mut Network,
-        #[prop] prop: &Propagation,
         file: PathBuf,
         geometry: String,
         driver: Option<String>,
         layer: String,
+        filter: Option<Vec<bool>>,
     ) -> Result<()> {
         let driver = if let Some(d) = driver {
             gdal::DriverManager::get_driver_by_name(&d)?
@@ -128,10 +128,16 @@ mod nadi_gis {
             ("end", OGRFieldType::OFTString),
         ])?;
         let fields = ["start", "end"];
-        for node in net
-            .nodes_propagation(prop)
-            .map_err(nadi_core::anyhow::Error::msg)?
-        {
+        let nodes: Vec<&Node> = if let Some(filt) = filter {
+            net.nodes()
+                .zip(filt)
+                .filter(|(_, f)| *f)
+                .map(|n| n.0)
+                .collect()
+        } else {
+            net.nodes().collect()
+        };
+        for node in nodes {
             let n = node.lock();
             if let RSome(out) = n.output() {
                 let start = String::try_from_attr(
@@ -172,12 +178,12 @@ mod nadi_gis {
     #[network_func(attrs=HashMap::new(), layer="nodes")]
     fn gis_save_nodes(
         net: &mut Network,
-        #[prop] prop: &Propagation,
         file: PathBuf,
         geometry: String,
         attrs: HashMap<String, String>,
         driver: Option<String>,
         layer: String,
+        filter: Option<Vec<bool>>,
     ) -> Result<()> {
         let driver = if let Some(d) = driver {
             gdal::DriverManager::get_driver_by_name(&d)?
@@ -201,10 +207,16 @@ mod nadi_gis {
         let field_types: Vec<(&str, u32)> = fields.iter().map(|(k, v)| (k.as_str(), v.0)).collect();
         // saving shp means field names will be shortened, it'll error later, how do we fix it?
         layer.create_defn_fields(&field_types)?;
-        for node in net
-            .nodes_propagation(prop)
-            .map_err(nadi_core::anyhow::Error::msg)?
-        {
+        let nodes: Vec<&Node> = if let Some(filt) = filter {
+            net.nodes()
+                .zip(filt)
+                .filter(|(_, f)| *f)
+                .map(|n| n.0)
+                .collect()
+        } else {
+            net.nodes().collect()
+        };
+        for node in nodes {
             let n = node.lock();
             let node_geom = String::try_from_attr(
                 n.attr(&geometry)
