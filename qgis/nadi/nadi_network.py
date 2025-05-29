@@ -41,9 +41,13 @@ from qgis.core import (
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterVectorDestination,
     QgsProcessingParameterField,
+    QgsProcessingLayerPostProcessorInterface,
     QgsProcessingUtils,
     QgsRunProcess,
+    QgsVectorLayer,
+    QgsLineSymbol,
 )
+from PyQt5.QtGui import QColor
 import pathlib
 from .nadi_exe import qgis_nadi_proc
 
@@ -140,24 +144,29 @@ class NadiNetwork(QgsProcessingAlgorithm):
         connection = self.parameterAsOutputLayer(
             parameters, self.CONNECTIONS, context
         )
-        connection_lyr = self.parameterAsLayer(
-            parameters, self.CONNECTIONS, context
-        )
         simplify = self.parameterAsBool(
             parameters, self.SIMPLIFY, context
         )
 
         # main command, ignore spatial reference and verbose for progress
-        
         cmd = ["network", "-i", "-v"]
         # add the input layers information
         if simplify:
             cmd += ["-e"]
         if points_id:
             cmd += ["-p", points_id]
+        
+        if streams[1] is "":
+            streams_file = f"{pathlib.Path(streams[0]).as_posix()}"
+        else:
+            streams_file = f"{pathlib.Path(streams[0]).as_posix()}::{streams[1]}"
+        if points[1] is "":
+            points_file = f"{pathlib.Path(points[0]).as_posix()}"
+        else:
+            points_file = f"{pathlib.Path(points[0]).as_posix()}::{points[1]}"
         cmd += [
-            f"{pathlib.Path(points[0]).as_posix()}::{points[1]}",
-            f"{pathlib.Path(streams[0]).as_posix()}::{streams[1]}",
+            points_file,
+            streams_file,
             "-n", str(pathlib.Path(connection).as_posix()),
         ]
 
@@ -171,13 +180,15 @@ class NadiNetwork(QgsProcessingAlgorithm):
         else:
             feedback.pushInfo("Completed")
 
+        context.layerToLoadOnCompletionDetails(connection).setPostProcessor(LayerPostProcessor.create(simplify))
+
         # Return the results of the algorithm. In this case our only result is
         # the feature sink which contains the processed features, but some
         # algorithms may return multiple feature sinks, calculated numeric
         # statistics, etc. These should all be included in the returned
         # dictionary, with keys matching the feature corresponding parameter
         # or output names.
-        return {self.CONNECTIONS: connection_lyr}
+        return {self.CONNECTIONS: connection}
 
     def name(self):
         """
@@ -218,3 +229,29 @@ class NadiNetwork(QgsProcessingAlgorithm):
 
     def createInstance(self):
         return NadiNetwork()
+
+
+class LayerPostProcessor(QgsProcessingLayerPostProcessorInterface):
+
+    instance = None
+
+    def __init__(self, simple):
+        self.simple = simple
+        super().__init__()
+    
+    def postProcessLayer(self, layer, context, feedback):
+        if not isinstance(layer, QgsVectorLayer):
+            return
+        renderer = layer.renderer().clone()
+        if self.simple:
+            symbol = QgsLineSymbol.createSimple({'line_color': 'red', 'line_width': '1.0'})
+        else:
+            symbol = QgsLineSymbol.createSimple({'line_color': 'blue', 'line_width': '0.5'})
+
+        renderer.setSymbol(symbol)
+        layer.setRenderer(renderer)
+
+    @staticmethod
+    def create(simple) -> 'LayerPostProcessor':
+        LayerPostProcessor.instance = LayerPostProcessor(simple)
+        return LayerPostProcessor.instance

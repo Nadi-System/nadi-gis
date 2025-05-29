@@ -42,8 +42,14 @@ from qgis.core import (
     QgsProcessingParameterVectorDestination,
     QgsProcessingParameterField,
     QgsProcessingUtils,
+    QgsProcessingLayerPostProcessorInterface,
     QgsRunProcess,
+    QgsVectorLayer,
+    QgsMarkerSymbol,
+    QgsCategorizedSymbolRenderer,
+    QgsRendererCategory,
 )
+from PyQt5.QtGui import QColor
 import pathlib
 from .nadi_exe import qgis_nadi_proc
 
@@ -106,15 +112,16 @@ class NadiCheck(QgsProcessingAlgorithm):
         node_cat = self.parameterAsOutputLayer(
             parameters, self.NODE_TYPES, context
         )
-        node_cat_lyr = self.parameterAsLayer(
-            parameters, self.NODE_TYPES, context
-        )
 
         # main command, ignore spatial reference and verbose for progress
         
         cmd = ["check"]
+        if streams[1] is "":
+            streams_file = f"{pathlib.Path(streams[0]).as_posix()}"
+        else:
+            streams_file = f"{pathlib.Path(streams[0]).as_posix()}::{streams[1]}"
         cmd += [
-            f"{pathlib.Path(streams[0]).as_posix()}::{streams[1]}",
+            streams_file,
             "--output",
             f"{pathlib.Path(node_cat).as_posix()}",
         ]
@@ -129,13 +136,14 @@ class NadiCheck(QgsProcessingAlgorithm):
         else:
             feedback.pushInfo("Completed")
 
+        context.layerToLoadOnCompletionDetails(node_cat).setPostProcessor(LayerPostProcessor.create())
         # Return the results of the algorithm. In this case our only result is
         # the feature sink which contains the processed features, but some
         # algorithms may return multiple feature sinks, calculated numeric
         # statistics, etc. These should all be included in the returned
         # dictionary, with keys matching the feature corresponding parameter
         # or output names.
-        return {self.NODE_TYPES: node_cat_lyr}
+        return {self.NODE_TYPES: node_cat}
 
     def name(self):
         """
@@ -176,3 +184,36 @@ class NadiCheck(QgsProcessingAlgorithm):
 
     def createInstance(self):
         return NadiCheck()
+
+
+
+class LayerPostProcessor(QgsProcessingLayerPostProcessorInterface):
+
+    instance = None
+
+    def postProcessLayer(self, layer, context, feedback):
+        if not isinstance(layer, QgsVectorLayer):
+            return
+
+        cats = QgsCategorizedSymbolRenderer("category", [
+            get_sym("Origin", False, color='gray', size=0.5),
+            get_sym("Confluence", False, color='green', size=0.8),
+            get_sym("Branch", True, color='red'),
+            get_sym("Outlet", True, color='blue', size=4.0),
+        ])
+        layer.setRenderer(cats)
+
+    @staticmethod
+    def create() -> 'LayerPostProcessor':
+        LayerPostProcessor.instance = LayerPostProcessor()
+        return LayerPostProcessor.instance
+
+
+def get_sym(val, _render, **props):
+    s = QgsRendererCategory()
+    s.setValue(val)
+    s.setLabel(val)
+    # this was buggy (didn't work)
+    # s.setRenderState(render)
+    s.setSymbol(QgsMarkerSymbol.createSimple(props))
+    return s

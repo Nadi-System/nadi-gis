@@ -113,8 +113,12 @@ class NadiOrder(QgsProcessingAlgorithm):
         # main command, ignore spatial reference and verbose for progress
         
         cmd = ["order"]
+        if streams[1] is "":
+            streams_file = f"{pathlib.Path(streams[0]).as_posix()}"
+        else:
+            streams_file = f"{pathlib.Path(streams[0]).as_posix()}::{streams[1]}"
         cmd += [
-            f"{pathlib.Path(streams[0]).as_posix()}::{streams[1]}",
+            streams_file,
             f"{pathlib.Path(ordered).as_posix()}",
         ]
 
