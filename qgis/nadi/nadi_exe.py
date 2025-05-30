@@ -14,15 +14,16 @@ def nadi_bin_path():
 def qgis_nadi_proc(feedback, cmd):
     def stdout_handlr(bytes_array):
         lines = stdout_handlr._buffer + bytes_array.data().decode("utf-8")
-        if not lines.endswith('\n'):
+        if not lines.endswith('\r'):
             try:
-                lines, stdout_handlr._buffer = lines.rsplit('\n', maxsplit=1)
+                lines, stdout_handlr._buffer = lines.rsplit('\r', maxsplit=1)
             except ValueError:
                 stdout_handlr._buffer = lines
                 return
-        for line in lines.strip().split('\n'):
+        for line in lines.strip().split('\r'):
             try:
                 label, progress = line.strip().split(":", maxsplit=1)
+                progress = progress.split('%')[0]
                 if label != stdout_handlr._curr:
                     feedback.setProgressText(label)
                     stdout_handlr._curr = label

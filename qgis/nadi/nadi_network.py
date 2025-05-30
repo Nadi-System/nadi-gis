@@ -37,6 +37,7 @@ from qgis.core import (
     QgsProcessingAlgorithm,
     QgsProcessingException,
     QgsProcessingFeedback,
+    QgsProcessingParameterFileDestination,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterVectorDestination,
@@ -76,6 +77,7 @@ class NadiNetwork(QgsProcessingAlgorithm):
     SIMPLIFY = 'SIMPLIFY'
     STREAMS_ID = 'STREAMS_ID'
     POINTS_ID = 'POINTS_ID'
+    OUTPUT = 'OUTPUT'
 
     def initAlgorithm(self, config):
         """
@@ -126,6 +128,13 @@ class NadiNetwork(QgsProcessingAlgorithm):
             )
         )
 
+        self.addParameter(
+            QgsProcessingParameterFileDestination(
+                self.OUTPUT,
+                self.tr('Output Network Text File')
+            )
+        )
+
     def processAlgorithm(self, parameters, context, feedback):
         """
         Here is where the processing itself takes place.
@@ -144,6 +153,9 @@ class NadiNetwork(QgsProcessingAlgorithm):
         connection = self.parameterAsOutputLayer(
             parameters, self.CONNECTIONS, context
         )
+        output = self.parameterAsFileOutput(
+            parameters, self.OUTPUT, context
+        )
         simplify = self.parameterAsBool(
             parameters, self.SIMPLIFY, context
         )
@@ -155,6 +167,8 @@ class NadiNetwork(QgsProcessingAlgorithm):
             cmd += ["-e"]
         if points_id:
             cmd += ["-p", points_id]
+        if output is not None:
+            cmd += ["-o", output]
         
         if streams[1] is "":
             streams_file = f"{pathlib.Path(streams[0]).as_posix()}"

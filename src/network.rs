@@ -179,13 +179,16 @@ impl CliArgs {
             }
             if self.verbose {
                 progress += 1;
-                eprint!(
-                    "\rSearching Connections: {} ({}/{})",
+                print!(
+                    "\rSearching Connections: {}% ({}/{})",
                     progress * 100 / total,
                     progress,
                     total
                 );
             }
+        }
+        if self.verbose {
+            println!();
         }
 
         if outlets.len() > 1 {
