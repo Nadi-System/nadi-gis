@@ -29,6 +29,7 @@ impl CliAction for CliArgs {
                 }
             }
             let mut file = File::create(self.output_file).unwrap();
+            // TODO, make it stream (async?)
             file.write_all(&resp.bytes()?)?;
         }
         Ok(())
