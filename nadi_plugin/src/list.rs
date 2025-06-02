@@ -5,7 +5,7 @@ use clap::Args;
 use colored::Colorize;
 use gdal::vector::{FieldValue, Layer, LayerAccess};
 use gdal::Dataset;
-use string_template_plus::{Render, RenderOptions, Template};
+use nadi_core::string_template::{Render, RenderOptions, Template};
 use text_diff::Difference;
 use toml::{Table, Value};
 

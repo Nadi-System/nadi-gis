@@ -3,16 +3,73 @@ use nadi_core::nadi_plugin::nadi_plugin;
 #[nadi_plugin]
 mod nadi_gis {
     use chrono::Datelike;
-    use gdal::vector::{FieldValue, Geometry, LayerAccess, LayerOptions, OGRFieldType};
+    use gdal::vector::{
+        Defn, Feature, FieldValue, Geometry, LayerAccess, LayerOptions, OGRFieldType,
+    };
     use gdal::{Dataset, DriverManager, DriverType};
     use nadi_core::abi_stable::std_types::{RSome, RString};
     use nadi_core::anyhow::{Context, Result};
     use nadi_core::attrs::{Date, DateTime, FromAttribute, FromAttributeRelaxed, HasAttributes};
-    use nadi_core::functions::Propagation;
     use nadi_core::nadi_plugin::network_func;
     use nadi_core::prelude::*;
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
+
+    /// Load network from a GIS file
+    ///
+    /// Loads the network from a gis file containing the edges in fields
+    #[network_func(ignore_null = false)]
+    fn gis_load_network(
+        net: &mut Network,
+        /// GIS file to load (can be any format GDAL can understand)
+        file: PathBuf,
+        /// Field in the GIS file corresponding to the input node name
+        source: String,
+        /// layer of the GIS file corresponding to the output node name
+        destination: String,
+        /// layer of the GIS file, first one picked by default
+        layer: Option<String>,
+        /// Ignore feature if it has fields with null value
+        ignore_null: bool,
+    ) -> Result<()> {
+        let data = Dataset::open(file)?;
+        let mut lyr = if let Some(lyr) = layer {
+            data.layer_by_name(&lyr)
+                .context("Given Layer doesn't exist")?
+        } else {
+            if data.layer_count() > 1 {
+                eprintln!("WARN Multiple layers found, you can choose a specific layer");
+                eprint!("WARN Available Layers:");
+                data.layers().for_each(|l| eprint!(" {:?}", l.name()));
+                eprintln!();
+            }
+            data.layer(0)?
+        };
+
+        let defn = Defn::from_layer(&lyr);
+        let fid_s = defn.field_index(&source)?;
+        let fid_d = defn.field_index(&destination)?;
+        let mut edges = Vec::with_capacity(lyr.feature_count() as usize);
+        for f in lyr.features() {
+            let inp_name = match f.field_as_string(fid_s)? {
+                Some(n) => n,
+                None if ignore_null => continue,
+                None => return Err(nadi_core::anyhow::Error::msg("Null value on source field")),
+            };
+            let out_name = match f.field_as_string(fid_d)? {
+                Some(n) => n,
+                None if ignore_null => continue,
+                None => return Err(nadi_core::anyhow::Error::msg("Null value on source field")),
+            };
+            edges.push((inp_name, out_name));
+        }
+        let edges_str: Vec<_> = edges
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        *net = Network::from_edges(&edges_str);
+        Ok(())
+    }
 
     /// Load node attributes from a GIS file
     ///
@@ -52,8 +109,10 @@ mod nadi_gis {
 
         let ignore: HashSet<String> = ignore.split(',').map(String::from).collect();
 
+        let defn = Defn::from_layer(&lyr);
+        let fid = defn.field_index(&node)?;
         for f in lyr.features() {
-            let name = f.field_as_string_by_name(&node)?.unwrap_or("".to_string());
+            let name = f.field_as_string(fid)?.unwrap_or("".to_string());
             let n = match net.node_by_name(&name) {
                 Some(n) => n,
                 None if err_no_node => {
@@ -102,7 +161,7 @@ mod nadi_gis {
     /// Save GIS file of the connections
     #[network_func(layer = "network")]
     fn gis_save_connections(
-        net: &mut Network,
+        net: &Network,
         file: PathBuf,
         geometry: String,
         driver: Option<String>,
@@ -127,7 +186,7 @@ mod nadi_gis {
             ("start", OGRFieldType::OFTString),
             ("end", OGRFieldType::OFTString),
         ])?;
-        let fields = ["start", "end"];
+        let defn = Defn::from_layer(&layer);
         let nodes: Vec<&Node> = if let Some(filt) = filter {
             net.nodes()
                 .zip(filt)
@@ -161,14 +220,11 @@ mod nadi_gis {
                 // only if it's different from last point of start
                 edge_geometry.add_point(start.get_point(0));
                 edge_geometry.add_point(end.get_point(0));
-                layer.create_feature_fields(
-                    edge_geometry,
-                    &fields,
-                    &[
-                        FieldValue::StringValue(n.name().to_string()),
-                        FieldValue::StringValue(out.lock().name().to_string()),
-                    ],
-                )?;
+                let mut ft = Feature::new(&defn)?;
+                ft.set_geometry(edge_geometry)?;
+                ft.set_field_string(0, n.name())?;
+                ft.set_field_string(1, out.lock().name())?;
+                ft.create(&mut layer)?;
             }
         }
         Ok(())
@@ -177,7 +233,7 @@ mod nadi_gis {
     /// Save GIS file of the nodes
     #[network_func(attrs=HashMap::new(), layer="nodes")]
     fn gis_save_nodes(
-        net: &mut Network,
+        net: &Network,
         file: PathBuf,
         geometry: String,
         attrs: HashMap<String, String>,
@@ -207,6 +263,11 @@ mod nadi_gis {
         let field_types: Vec<(&str, u32)> = fields.iter().map(|(k, v)| (k.as_str(), v.0)).collect();
         // saving shp means field names will be shortened, it'll error later, how do we fix it?
         layer.create_defn_fields(&field_types)?;
+        let defn = Defn::from_layer(&layer);
+        let indices: HashMap<&str, usize> = fields
+            .iter()
+            .filter_map(|f| Some((f.0.as_str(), defn.field_index(&f.0).ok()?)))
+            .collect();
         let nodes: Vec<&Node> = if let Some(filt) = filter {
             net.nodes()
                 .zip(filt)
@@ -224,14 +285,13 @@ mod nadi_gis {
             )
             .map_err(nadi_core::anyhow::Error::msg)?;
             let node_geom = Geometry::from_wkt(&node_geom)?;
-            let feat_fields: Vec<(&str, FieldValue)> = fields
+            let mut ft = Feature::new(&defn)?;
+            ft.set_geometry(node_geom)?;
+            fields
                 .iter()
                 .filter_map(|(k, (_, func))| Some((k.as_str(), func(n.attr(k)?))))
-                .collect();
-
-            let field_names: Vec<&str> = feat_fields.iter().map(|(k, _)| *k).collect();
-            let field_vals: Vec<FieldValue> = feat_fields.into_iter().map(|(_, v)| v).collect();
-            layer.create_feature_fields(node_geom, &field_names, &field_vals)?;
+                .try_for_each(|(k, v)| ft.set_field(indices[k], &v))?;
+            ft.create(&mut layer)?;
         }
         Ok(())
     }
