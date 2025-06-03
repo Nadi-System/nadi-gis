@@ -67,7 +67,7 @@ mod nadi_gis {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        *net = Network::from_edges(&edges_str);
+        *net = Network::from_edges(&edges_str).map_err(nadi_core::anyhow::Error::msg)?;
         Ok(())
     }
 
