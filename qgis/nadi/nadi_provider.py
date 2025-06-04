@@ -30,12 +30,13 @@ __copyright__ = '(C) 2023 by Gaurav Atreya'
 
 __revision__ = '$Format:%H$'
 
+import os
+from qgis.PyQt.QtGui import QIcon
 from qgis.core import QgsProcessingProvider
 from .nadi_network import NadiNetwork
 from .nadi_check import NadiCheck
 from .nadi_order import NadiOrder
 from .nadi_download import NadiDownload
-
 
 class NadiProvider(QgsProcessingProvider):
 
@@ -83,7 +84,7 @@ class NadiProvider(QgsProcessingProvider):
         Should return a QIcon which is used for your provider inside
         the Processing toolbox.
         """
-        return QgsProcessingProvider.icon(self)
+        return QIcon(os.path.join(os.path.dirname(__file__), "icon.png"))
 
     def longName(self):
         """
