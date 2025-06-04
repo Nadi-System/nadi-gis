@@ -10,9 +10,9 @@ pub struct CliArgs {
     /// USGS Site number (separate by ',' for multiple)
     #[arg(short, long, value_delimiter = ',', required = true)]
     site_no: Vec<String>,
-    /// Type of data (u/d/t/b)
+    /// Type of data (u/d/t/b/n)
     ///
-    /// [upstream (u), downstream (d), tributories (t), basin (b)]
+    /// [upstream (u), downstream (d), tributaries (t), basin (b), nwis-site (n)]
     #[arg(
         short,
         long,
@@ -25,6 +25,9 @@ pub struct CliArgs {
     /// Display the url and exit (no download)
     #[arg(short, long, action)]
     url: bool,
+    /// Display the progress
+    #[arg(short, long, action)]
+    verbose: bool,
     #[arg(short, long, value_hint=ValueHint::DirPath, default_value=".")]
     output_dir: PathBuf,
 }
@@ -36,7 +39,7 @@ impl CliAction for CliArgs {
                 if self.url {
                     println!("{}", data.usgs_url(&site));
                 } else {
-                    data.download(&site, &self.output_dir);
+                    data.download(&site, &self.output_dir, self.verbose);
                 }
             }
         }
@@ -51,7 +54,7 @@ pub enum GeoInfo {
     #[value(alias = "d")]
     Downstream,
     #[value(alias = "t")]
-    Tributories,
+    Tributaries,
     #[value(alias = "b")]
     Basin,
     #[value(alias = "n")]
@@ -67,7 +70,7 @@ impl GeoInfo {
             Self::Upstream => "navigate/UM?f=json",
             Self::NwisSite => "navigate/UT/nwissite?f=json",
             Self::Downstream => "navigate/DM?f=json",
-            Self::Tributories => "navigate/UT?f=json",
+            Self::Tributaries => "navigate/UT?f=json",
             Self::Basin => "basin?f=json",
         }
     }
@@ -78,9 +81,9 @@ impl GeoInfo {
             match self {
                 Self::Upstream => "upstream",
                 Self::Downstream => "downstream",
-                Self::Tributories => "tributaries",
+                Self::Tributaries => "tributaries",
                 Self::Basin => "basin",
-                Self::NwisSite => "nwissites",
+                Self::NwisSite => "nwis-site",
             }
         )
     }
@@ -90,13 +93,14 @@ impl GeoInfo {
         format!("https://api.water.usgs.gov/nldi/linked-data/nwissite/USGS-{site_no}/{query}")
     }
 
-    pub fn download(&self, site_no: &str, dir: &PathBuf) {
+    pub fn download(&self, site_no: &str, dir: &PathBuf, _verbose: bool) {
         let url = self.usgs_url(site_no);
         let bytes = reqwest::blocking::get(url).unwrap().bytes().unwrap();
         if bytes.is_empty() {
             eprintln!("No data");
             return;
         }
+        let _ = std::fs::create_dir_all(dir);
         let filepath = dir.join(self.filename(site_no));
         let mut file = File::create(filepath).unwrap();
         file.write_all(&bytes).unwrap();

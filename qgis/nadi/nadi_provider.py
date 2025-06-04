@@ -34,6 +34,7 @@ from qgis.core import QgsProcessingProvider
 from .nadi_network import NadiNetwork
 from .nadi_check import NadiCheck
 from .nadi_order import NadiOrder
+from .nadi_download import NadiDownload
 
 
 class NadiProvider(QgsProcessingProvider):
@@ -58,6 +59,7 @@ class NadiProvider(QgsProcessingProvider):
         self.addAlgorithm(NadiNetwork())
         self.addAlgorithm(NadiCheck())
         self.addAlgorithm(NadiOrder())
+        self.addAlgorithm(NadiDownload())
 
     def id(self):
         """
