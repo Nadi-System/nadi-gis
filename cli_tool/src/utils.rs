@@ -18,6 +18,22 @@ pub fn parse_layer(arg: &str) -> Result<(PathBuf, String), anyhow::Error> {
     if let Some((path, layer)) = arg.split_once("::") {
         let data = Dataset::open(path)?;
         if data.layer_by_name(layer).is_err() {
+            if data.layer_count() == 1 {
+                let fpath = PathBuf::from(path);
+                // if there is one layer and the layer name is the
+                // path name = files that do not support layers; in
+                // that case ignore the layer specification and return
+                // the layer
+                eprintln!("File {fpath:?} doesn't support layers; using the available data");
+                let fname = fpath
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if data.layer(0).unwrap().name() == fname {
+                    return Ok((fpath, fname));
+                }
+            }
             Err(std::io::Error::new(
                 std::io::ErrorKind::NotFound,
                 format!("Layer name {layer} doesn't exist in the file {path}"),

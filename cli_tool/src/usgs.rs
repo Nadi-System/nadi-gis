@@ -92,17 +92,12 @@ impl GeoInfo {
 
     pub fn download(&self, site_no: &str, dir: &PathBuf) {
         let url = self.usgs_url(site_no);
-        let filepath = dir.join(self.filename(site_no));
         let bytes = reqwest::blocking::get(url).unwrap().bytes().unwrap();
         if bytes.is_empty() {
             eprintln!("No data");
             return;
         }
-        let filepath = dir.join(format!(
-            "{}_{}.json",
-            site_no,
-            self.usgs_abbr().split('/').last().unwrap()
-        ));
+        let filepath = dir.join(self.filename(site_no));
         let mut file = File::create(filepath).unwrap();
         file.write_all(&bytes).unwrap();
     }
