@@ -197,22 +197,21 @@ class LayerPostProcessor(QgsProcessingLayerPostProcessorInterface):
         if not isinstance(layer, QgsVectorLayer):
             return
         renderer = layer.renderer().clone()
-        match self.data_type:
-            case "upstream":
-                symbol = QgsLineSymbol.createSimple({'line_color': 'blue', 'line_width': '1.0'})
-                renderer.setSymbol(symbol)
-            case "downstream":
-                symbol = QgsLineSymbol.createSimple({'line_color': 'blue', 'line_width': '1.0'})
-                renderer.setSymbol(symbol)
-            case "tributaries":
-                symbol = QgsLineSymbol.createSimple({'line_color': 'blue', 'line_width': '0.5'})
-                renderer.setSymbol(symbol)
-            case "basin":
-                symbol = QgsFillSymbol.createSimple({'color': 'green', "opacity": "0.4"})
-                renderer.setSymbol(symbol)
-            case "nwis-site":
-                symbol = QgsMarkerSymbol.createSimple({'color': 'orange', 'size':'0.5'})
-                renderer.setSymbol(symbol)
+        if self.data_type == "upstream":
+            symbol = QgsLineSymbol.createSimple({'line_color': 'blue', 'line_width': '1.0'})
+            renderer.setSymbol(symbol)
+        elif self.data_type == "downstream":
+            symbol = QgsLineSymbol.createSimple({'line_color': 'blue', 'line_width': '1.0'})
+            renderer.setSymbol(symbol)
+        elif self.data_type == "tributaries":
+            symbol = QgsLineSymbol.createSimple({'line_color': 'blue', 'line_width': '0.5'})
+            renderer.setSymbol(symbol)
+        elif self.data_type == "basin":
+            symbol = QgsFillSymbol.createSimple({'color': 'green', "opacity": "0.4"})
+            renderer.setSymbol(symbol)
+        elif self.data_type == "nwis-site":
+            symbol = QgsMarkerSymbol.createSimple({'color': 'orange', 'size':'0.5'})
+            renderer.setSymbol(symbol)
         layer.setRenderer(renderer)
 
     @staticmethod
