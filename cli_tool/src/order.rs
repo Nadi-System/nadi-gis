@@ -9,6 +9,7 @@ use gdal::vector::{
     Defn, Feature, FieldDefn, FieldValue, Geometry, Layer, LayerAccess, LayerOptions, OGRFieldType,
 };
 use gdal::{Dataset, DriverManager, DriverType};
+use rayon::prelude::*;
 
 use crate::cliargs::CliAction;
 use crate::types::*;
@@ -36,9 +37,10 @@ pub struct CliArgs {
 
 impl CliAction for CliArgs {
     fn run(self) -> Result<(), anyhow::Error> {
+        let points = get_endpoints(&self.streams, self.verbose)?;
+
         let streams_data = Dataset::open(&self.streams.0).unwrap();
         let mut streams_lyr = streams_data.layer_by_name(&self.streams.1).unwrap();
-        let points = get_endpoints(&mut streams_lyr, self.verbose)?;
         if points.is_empty() {
             eprintln!("Empty file, nothing to do.");
             return Ok(());
@@ -47,16 +49,23 @@ impl CliAction for CliArgs {
             println!("\nCreating HashMap from points")
         }
         let mut order: HashMap<(&Point2D, &Point2D), usize> =
-            points.iter().map(|e| ((&e.0, &e.1), 0)).collect();
+            points.par_iter().map(|e| ((&e.0, &e.1), 0)).collect();
         if self.verbose {
-            println!("\nCreating Edges")
+            println!("Creating Edges")
         }
-        let edges: HashMap<&Point2D, &Point2D> = points.iter().rev().map(|(s, e)| (s, e)).collect();
+        let edges: HashMap<&Point2D, &Point2D> =
+            points.par_iter().rev().map(|(s, e)| (s, e)).collect();
         if self.verbose {
-            println!("\nDetecting leaf nodes")
+            println!("Detecting leaf nodes")
         }
-        let tips: HashSet<&Point2D> = edges.iter().map(|(&s, _)| s).collect();
-        let no_tips: HashSet<&Point2D> = edges.iter().map(|(_, &e)| e).collect();
+        let tips: HashSet<&Point2D> = edges.par_iter().map(|(&s, _)| s).collect();
+        if self.verbose {
+            println!("Detecting non leaf nodes")
+        }
+        let no_tips: HashSet<&Point2D> = edges.par_iter().map(|(_, &e)| e).collect();
+        if self.verbose {
+            println!("Preparing to count order")
+        }
         let tips = tips.difference(&no_tips);
 
         let mut progress = 0;
@@ -171,31 +180,54 @@ fn write_layer(
 }
 
 pub fn get_endpoints(
-    layer: &mut Layer,
-    verbose: bool,
+    streams: &(PathBuf, String),
+    _verbose: bool,
 ) -> Result<Vec<(Point2D, Point2D)>, anyhow::Error> {
+    let streams_data = Dataset::open(&streams.0).unwrap();
+    let layer = streams_data.layer_by_name(&streams.1).unwrap();
     let total = layer.feature_count() as usize;
-    layer
-        .features()
-        .enumerate()
-        .filter_map(|(i, f)| {
-            if verbose {
-                print!(
-                    "\rReading Geometries: {}% ({} of {})",
-                    i * 100 / total,
-                    i,
-                    total
-                );
-            }
-            f.geometry().map(|g1| {
-                let (a, b) = if g1.geometry_name().starts_with("Multi") {
-                    let g = g1.get_geometry(0);
-                    (g.get_point(0), g.get_point((g.point_count() - 1) as i32))
-                } else {
-                    (g1.get_point(0), g1.get_point((g1.point_count() - 1) as i32))
-                };
-                Ok((Point2D::new3(a)?, Point2D::new3(b)?))
-            })
+    std::mem::drop(layer);
+    std::mem::drop(streams_data);
+    let chunk_size = 1024;
+    (0..total)
+        .into_par_iter()
+        .step_by(chunk_size)
+        .map(|ind| -> anyhow::Result<Vec<(Point2D, Point2D)>> {
+            let streams_data = Dataset::open(&streams.0).unwrap();
+            let layer = streams_data.layer_by_name(&streams.1).unwrap();
+            (0..chunk_size)
+                .filter_map(|off| {
+                    // if verbose {
+                    //     print!(
+                    //         "\rReading Geometries: {}% ({} of {})",
+                    //         off * 100 / chunk_size,
+                    //         off,
+                    //         chunk_size
+                    //     );
+                    // }
+                    let f = layer.feature((ind + off) as u64)?;
+                    let g1 = f.geometry()?;
+                    let (a, b) = if g1.geometry_name().starts_with("MULTI") {
+                        let g = g1.get_geometry(0);
+                        (g.get_point(0), g.get_point((g.point_count() - 1) as i32))
+                    } else {
+                        (g1.get_point(0), g1.get_point((g1.point_count() - 1) as i32))
+                    };
+                    Some(edge_pts(a, b))
+                })
+                .collect()
         })
-        .collect()
+        .try_reduce(
+            // Try reduce will reduce the above maps in parallel,
+            // and exit early on error
+            || Vec::with_capacity(total),
+            |a, mut b| {
+                b.extend(a);
+                Ok(b)
+            },
+        )
+}
+
+fn edge_pts(a: (f64, f64, f64), b: (f64, f64, f64)) -> anyhow::Result<(Point2D, Point2D)> {
+    Ok((Point2D::new3(a)?, Point2D::new3(b)?))
 }

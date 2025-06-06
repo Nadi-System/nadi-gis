@@ -10,8 +10,8 @@ use gdal::vector::{
     Defn, Feature, FieldValue, Geometry, Layer, LayerAccess, LayerOptions, OGRFieldType,
 };
 use gdal::{Dataset, Driver, DriverManager, GdalOpenFlags, Metadata};
-
 use itertools::Itertools;
+use rayon::prelude::*;
 use rstar::RTree;
 
 use crate::cliargs::CliAction;
@@ -350,8 +350,8 @@ impl CliArgs {
         let mut progress: usize = 0;
         let total = points.len();
         eprintln!("Loading Points in RTree");
-        let pts: HashSet<_> = edges.iter().flat_map(|(k, v)| vec![k, v]).collect();
-        let pts: Vec<_> = pts.into_iter().map(|k| k.coord2()).collect();
+        let pts: HashSet<_> = edges.par_iter().flat_map(|(k, v)| vec![k, v]).collect();
+        let pts: Vec<_> = pts.into_par_iter().map(|k| k.coord2()).collect();
         let all_points = RTree::bulk_load(pts);
         let sq_threshold = self.threshold.map(|t| t.powi(2));
 
@@ -463,7 +463,11 @@ fn read_stream_points(
         match f.geometry() {
             Some(g) => {
                 let mut pts = Vec::new();
-                g.get_points(&mut pts);
+                if g.geometry_name().starts_with("MULTI") {
+                    g.get_geometry(0).get_points(&mut pts);
+                } else {
+                    g.get_points(&mut pts);
+                }
                 streams.append(&mut edges_from_pts(&pts, take));
             }
             None => return Err(anyhow::Error::msg("No geometry found in the layer")),
