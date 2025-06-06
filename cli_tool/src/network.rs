@@ -207,11 +207,21 @@ impl CliArgs {
             let file = File::create(outfile)?;
             let mut writer = BufWriter::new(file);
             for (k, v) in &str_edges {
-                writeln!(writer, "{k} -> {v}")?;
+                match (valid_node_name(k), valid_node_name(v)) {
+                    (true, true) => writeln!(writer, "{k} -> {v}")?,
+                    (true, false) => writeln!(writer, "{k} -> \"{v}\"")?,
+                    (false, true) => writeln!(writer, "\"{k}\" -> {v}")?,
+                    (false, false) => writeln!(writer, "\"{k}\" -> \"{v}\"")?,
+                }
             }
         } else {
             for (k, v) in &str_edges {
-                println!("{k} -> {v}");
+                match (valid_node_name(k), valid_node_name(v)) {
+                    (true, true) => println!("{k} -> {v}"),
+                    (true, false) => println!("{k} -> \"{v}\""),
+                    (false, true) => println!("\"{k}\" -> {v}"),
+                    (false, false) => println!("\"{k}\" -> \"{v}\""),
+                }
             }
         }
 
@@ -503,4 +513,18 @@ fn edges_from_pts(pts: &[(f64, f64, f64)], take: usize) -> Vec<(Point2D, Point2D
         eds.push((start, end));
         eds
     }
+}
+
+fn valid_node_name(n: &str) -> bool {
+    let mut chars = n.chars();
+    match chars.next() {
+        Some('_') => (),
+        Some(c) => {
+            if !c.is_alphabetic() {
+                return false;
+            }
+        }
+        None => return true,
+    }
+    chars.all(|c| c == '_' || c.is_alphanumeric())
 }
