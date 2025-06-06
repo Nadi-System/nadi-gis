@@ -206,11 +206,11 @@ impl CliArgs {
         if let Some(outfile) = &self.output {
             let file = File::create(outfile)?;
             let mut writer = BufWriter::new(file);
-            for (k, v) in str_edges {
+            for (k, v) in &str_edges {
                 writeln!(writer, "{k} -> {v}")?;
             }
         } else {
-            for (k, v) in str_edges {
+            for (k, v) in &str_edges {
                 println!("{k} -> {v}");
             }
         }
@@ -224,12 +224,46 @@ impl CliArgs {
                     ty: gdal_sys::OGRwkbGeometryType::wkbLineString,
                     ..Default::default()
                 })?;
-                for (start, end) in &points_touched_edges {
-                    let mut edge_geometry =
-                        Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbLineString)?;
-                    edge_geometry.add_point_2d(start.coord2());
-                    edge_geometry.add_point_2d(end.coord2());
-                    layer.create_feature(edge_geometry)?;
+                layer.create_defn_fields(&[
+                    ("start", OGRFieldType::OFTString),
+                    ("end", OGRFieldType::OFTString),
+                ])?;
+                let defn = Defn::from_layer(&layer);
+                if self.endpoints {
+                    for (start, end) in &str_edges {
+                        let mut edge_geom =
+                            Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbLineString)?;
+                        edge_geom.add_point_2d(points[*start].coord2());
+                        edge_geom.add_point_2d(points[*end].coord2());
+                        let mut ft = Feature::new(&defn)?;
+                        ft.set_geometry(edge_geom)?;
+                        ft.set_field_string(0, start)?;
+                        ft.set_field_string(1, end)?;
+                        ft.create(&mut layer)?;
+                    }
+                } else {
+                    let geom_edges: HashMap<_, _> =
+                        points_touched_edges.iter().map(|&(k, v)| (k, v)).collect();
+                    for (start, end) in &str_edges {
+                        let mut edge_geom =
+                            Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbLineString)?;
+                        let st_pt = &points[*start];
+                        edge_geom.add_point_2d(st_pt.coord2());
+                        let end_pt = &points[*end];
+                        if st_pt != end_pt {
+                            let mut mid = geom_edges[&st_pt];
+                            while mid != end_pt {
+                                edge_geom.add_point_2d(mid.coord2());
+                                mid = geom_edges[mid];
+                            }
+                        }
+                        edge_geom.add_point_2d(end_pt.coord2());
+                        let mut ft = Feature::new(&defn)?;
+                        ft.set_geometry(edge_geom)?;
+                        ft.set_field_string(0, start)?;
+                        ft.set_field_string(1, end)?;
+                        ft.create(&mut layer)?;
+                    }
                 }
                 Ok(())
             };
