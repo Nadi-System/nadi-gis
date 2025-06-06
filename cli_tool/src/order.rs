@@ -38,27 +38,23 @@ impl CliAction for CliArgs {
     fn run(self) -> Result<(), anyhow::Error> {
         let streams_data = Dataset::open(&self.streams.0).unwrap();
         let mut streams_lyr = streams_data.layer_by_name(&self.streams.1).unwrap();
-        let streams = get_geometries(&mut streams_lyr, &None)?;
-        if streams.is_empty() {
+        let points = get_endpoints(&mut streams_lyr, self.verbose)?;
+        if points.is_empty() {
             eprintln!("Empty file, nothing to do.");
             return Ok(());
         }
-        let points = streams
-            .iter()
-            .map(|(_, g)| {
-                if g.point_count() == 1 {
-                    Err(anyhow::Error::msg("Point Geometry in Streams file"))
-                } else {
-                    Ok((
-                        Point2D::new3(g.get_point(0))?,
-                        Point2D::new3(g.get_point((g.point_count() - 1) as i32))?,
-                    ))
-                }
-            })
-            .collect::<anyhow::Result<Vec<(Point2D, Point2D)>>>()?;
+        if self.verbose {
+            println!("\nCreating HashMap from points")
+        }
         let mut order: HashMap<(&Point2D, &Point2D), usize> =
             points.iter().map(|e| ((&e.0, &e.1), 0)).collect();
+        if self.verbose {
+            println!("\nCreating Edges")
+        }
         let edges: HashMap<&Point2D, &Point2D> = points.iter().rev().map(|(s, e)| (s, e)).collect();
+        if self.verbose {
+            println!("\nDetecting leaf nodes")
+        }
         let tips: HashSet<&Point2D> = edges.iter().map(|(&s, _)| s).collect();
         let no_tips: HashSet<&Point2D> = edges.iter().map(|(_, &e)| e).collect();
         let tips = tips.difference(&no_tips);
@@ -74,7 +70,12 @@ impl CliAction for CliArgs {
             }
             if self.verbose {
                 progress += 1;
-                println!("Calculating Order: {}", progress * 100 / total);
+                print!(
+                    "\rCalculating Order: {}% ({} of {})",
+                    progress * 100 / total,
+                    progress,
+                    total
+                );
             }
         }
 
@@ -167,4 +168,34 @@ fn write_layer(
         }
     }
     Ok(())
+}
+
+pub fn get_endpoints(
+    layer: &mut Layer,
+    verbose: bool,
+) -> Result<Vec<(Point2D, Point2D)>, anyhow::Error> {
+    let total = layer.feature_count() as usize;
+    layer
+        .features()
+        .enumerate()
+        .filter_map(|(i, f)| {
+            if verbose {
+                print!(
+                    "\rReading Geometries: {}% ({} of {})",
+                    i * 100 / total,
+                    i,
+                    total
+                );
+            }
+            f.geometry().map(|g1| {
+                let (a, b) = if g1.geometry_name().starts_with("Multi") {
+                    let g = g1.get_geometry(0);
+                    (g.get_point(0), g.get_point((g.point_count() - 1) as i32))
+                } else {
+                    (g1.get_point(0), g1.get_point((g1.point_count() - 1) as i32))
+                };
+                Ok((Point2D::new3(a)?, Point2D::new3(b)?))
+            })
+        })
+        .collect()
 }
