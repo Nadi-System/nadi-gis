@@ -463,7 +463,11 @@ fn read_stream_points(
         match f.geometry() {
             Some(g) => {
                 let mut pts = Vec::new();
-                g.get_points(&mut pts);
+                if g.geometry_name().starts_with("MULTI") {
+                    g.get_geometry(0).get_points(&mut pts);
+                } else {
+                    g.get_points(&mut pts);
+                }
                 streams.append(&mut edges_from_pts(&pts, take));
             }
             None => return Err(anyhow::Error::msg("No geometry found in the layer")),
