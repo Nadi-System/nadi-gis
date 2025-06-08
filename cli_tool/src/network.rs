@@ -94,11 +94,11 @@ impl CliArgs {
     fn connections(&self, mut points_lyr: Layer, mut streams_lyr: Layer) -> anyhow::Result<()> {
         let points: Vec<(String, Point2D)> = self.points(&mut points_lyr)?;
         let streams = self.edges(&mut streams_lyr)?;
-        if self.verbose {
-            println!();
-        }
         if points.is_empty() || streams.is_empty() {
             return Ok(());
+        }
+        if self.verbose {
+            println!("\nRunning Rstar algorithm")
         }
         let points = self.rstar(points, &streams)?;
 
@@ -359,7 +359,9 @@ impl CliArgs {
         let mut points_closest: HashMap<String, Point2D> = HashMap::with_capacity(points.len());
         let mut progress: usize = 0;
         let total = points.len();
-        eprintln!("Loading Points in RTree");
+        if self.verbose {
+            println!("Loading Points in RTree");
+        }
         let pts: HashSet<_> = edges.iter().flat_map(|(k, v)| vec![k, v]).collect();
         let pts: Vec<_> = pts.into_iter().map(|k| k.coord2()).collect();
         let all_points = RTree::bulk_load(pts);
