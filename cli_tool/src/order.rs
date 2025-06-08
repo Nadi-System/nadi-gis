@@ -188,14 +188,21 @@ pub fn get_endpoints(
                 );
             }
             f.geometry().map(|g1| {
-                let (a, b) = if g1.geometry_name().starts_with("Multi") {
-                    let g = g1.get_geometry(0);
-                    (g.get_point(0), g.get_point((g.point_count() - 1) as i32))
+                let gc = g1.geometry_count();
+                // for handling multi-geometry as well
+                if gc > 0 {
+                    (0..gc)
+                        .map(|j| {
+                            let g = g1.get_geometry(j);
+                            (g.get_point(0), g.get_point((g.point_count() - 1) as i32))
+                        })
+                        .collect()
                 } else {
-                    (g1.get_point(0), g1.get_point((g1.point_count() - 1) as i32))
-                };
-                Ok((Point2D::new3(a)?, Point2D::new3(b)?))
+                    vec![(g1.get_point(0), g1.get_point((g1.point_count() - 1) as i32))]
+                }
             })
         })
+        .flatten()
+        .map(|(a, b)| Ok((Point2D::new3(a)?, Point2D::new3(b)?)))
         .collect()
 }

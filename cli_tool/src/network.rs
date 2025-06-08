@@ -473,12 +473,18 @@ fn read_stream_points(
         match f.geometry() {
             Some(g) => {
                 let mut pts = Vec::new();
-                if g.geometry_name().starts_with("MULTI") {
-                    g.get_geometry(0).get_points(&mut pts);
+                let gc = g.geometry_count();
+                if gc > 0 {
+                    // multi geometry and polygons, but polygon are
+                    // invalid geometry for this: so it's UB
+                    for i in 0..gc {
+                        g.get_geometry(i).get_points(&mut pts);
+                        streams.append(&mut edges_from_pts(&pts, take));
+                    }
                 } else {
                     g.get_points(&mut pts);
+                    streams.append(&mut edges_from_pts(&pts, take));
                 }
-                streams.append(&mut edges_from_pts(&pts, take));
             }
             None => return Err(anyhow::Error::msg("No geometry found in the layer")),
         };
