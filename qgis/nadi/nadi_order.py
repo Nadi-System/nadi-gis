@@ -34,11 +34,8 @@ import os
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtCore import QCoreApplication
 from qgis.core import (
-    QgsFeatureSink,
     QgsProcessing,
     QgsProcessingAlgorithm,
-    QgsProcessingException,
-    QgsProcessingFeedback,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterFeatureSource,
     QgsProcessingLayerPostProcessorInterface,
@@ -51,7 +48,6 @@ from qgis.core import (
     QgsVectorLayer,
     QgsInterpolatedLineColor,
     QgsInterpolatedLineWidth,
-    QgsRendererRange,
     QgsGraduatedSymbolRenderer,
 )
 from qgis.core import Qgis
@@ -67,6 +63,7 @@ class NadiOrder(QgsProcessingAlgorithm):
 
     ORDERED_STREAMS = 'ORDERED_STREAMS'
     STREAMS = 'STREAMS'
+    REVERSE = 'REVERSE'
 
     def initAlgorithm(self, config):
         """
@@ -78,6 +75,13 @@ class NadiOrder(QgsProcessingAlgorithm):
                 self.STREAMS,
                 self.tr('Input Streams'),
                 [QgsProcessing.TypeVectorLine]
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.REVERSE,
+                self.tr('Reverse Stream Network Direction'),
+                False
             )
         )
 
@@ -92,14 +96,16 @@ class NadiOrder(QgsProcessingAlgorithm):
         streams = self.parameterAsCompatibleSourceLayerPathAndLayerName(
             parameters, self.STREAMS, context, ["gpkg"]
         )
+        reverse = self.parameterAsBool(
+            parameters, self.REVERSE, context
+        )
         ordered = self.parameterAsOutputLayer(
             parameters, self.ORDERED_STREAMS, context
         )
-        ordered_lyr = self.parameterAsLayer(
-            parameters, self.ORDERED_STREAMS, context
-        )
         cmd = ["order"]
-        if streams[1] is "":
+        if reverse:
+            cmd += ["--reverse"]
+        if streams[1] == "":
             streams_file = f"{pathlib.Path(streams[0]).as_posix()}"
         else:
             streams_file = f"{pathlib.Path(streams[0]).as_posix()}::{streams[1]}"
@@ -144,26 +150,27 @@ class NadiOrder(QgsProcessingAlgorithm):
 
 
 class LayerPostProcessor(QgsProcessingLayerPostProcessorInterface):
-
     instance = None
-    
+
     def postProcessLayer(self, layer, context, feedback):
         if not isinstance(layer, QgsVectorLayer):
             return
         symbol = QgsSymbol.defaultSymbol(layer.geometryType())
         symbol.setColor(QColor("blue"))
-        
         max_ord = layer.aggregate(Qgis.Aggregate.Max, "order")
         if max_ord[1]:
             rend = QgsGraduatedSymbolRenderer()
             rend.setClassAttribute("order")
             rend.setSourceSymbol(symbol)
-            rend.addClassLowerUpper(0, max_ord[0])
-            for i in range(1,10):
-                rend.addBreak(max_ord[0] * sum(range(1,i+1)) // 200)
+            breaks = [
+                max_ord[0] * b // 100
+                for b in [0, 1, 2, 4, 12, 50]
+            ]
+            for i in range(1, 6):
+                rend.addClassLowerUpper(breaks[i-1], breaks[i])
+            rend.addClassLowerUpper(breaks[i], max_ord[0])
             rend.setGraduatedMethod(Qgis.GraduatedMethod.Size)
             rend.setSymbolSizes(0.1, 1.0)
-            rend.updateClasses(layer, 10)
             layer.setRenderer(rend)
         else:
             renderer = layer.renderer().clone()

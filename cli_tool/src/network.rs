@@ -51,6 +51,12 @@ pub struct CliArgs {
     /// processing.
     #[arg(short, long, default_value = "1")]
     take: usize,
+    /// reverse the direction of streamlines
+    ///
+    /// Algorithm assumes the geometry starts from upstream and goes
+    /// to downstream. If it's reverse use this flag.
+    #[arg(short, long, action)]
+    reverse: bool,
     /// Threashold distance for the snapping to streams
     #[arg(short = 'T', long)]
     threshold: Option<f64>,
@@ -295,7 +301,7 @@ impl CliArgs {
 
     fn edges(&self, streams_lyr: &mut Layer) -> anyhow::Result<HashMap<Point2D, Point2D>> {
         let s: HashMap<Point2D, Point2D> =
-            read_stream_points(streams_lyr, self.verbose, self.take)?
+            read_stream_points(streams_lyr, self.verbose, self.take, self.reverse)?
                 .into_iter()
                 .rev()
                 .collect();
@@ -463,6 +469,7 @@ fn read_stream_points(
     layer: &mut Layer,
     verbose: bool,
     take: usize,
+    reverse: bool,
 ) -> Result<Vec<(Point2D, Point2D)>, anyhow::Error> {
     let total = layer.feature_count();
     let mut progress = 0;
@@ -481,11 +488,11 @@ fn read_stream_points(
                     // invalid geometry for this: so it's UB
                     for i in 0..gc {
                         g.get_geometry(i).get_points(&mut pts);
-                        streams.append(&mut edges_from_pts(&pts, take));
+                        streams.append(&mut edges_from_pts(&pts, take, reverse));
                     }
                 } else {
                     g.get_points(&mut pts);
-                    streams.append(&mut edges_from_pts(&pts, take));
+                    streams.append(&mut edges_from_pts(&pts, take, reverse));
                 }
             }
             None => return Err(anyhow::Error::msg("No geometry found in the layer")),
@@ -504,12 +511,16 @@ fn read_stream_points(
     Ok(streams)
 }
 
-fn edges_from_pts(pts: &[(f64, f64, f64)], take: usize) -> Vec<(Point2D, Point2D)> {
+fn edges_from_pts(pts: &[(f64, f64, f64)], take: usize, reverse: bool) -> Vec<(Point2D, Point2D)> {
     let mut start = Point2D::new3(pts[0]).unwrap();
     let end = Point2D::new3(pts[pts.len() - 1]).unwrap();
     let mid = pts.len() - 2;
     if mid < take {
-        vec![(start, end)]
+        if reverse {
+            vec![(end, start)]
+        } else {
+            vec![(start, end)]
+        }
     } else {
         // reducing the number of intermediate nodes
         let mut eds = Vec::with_capacity(mid / take + 3);
@@ -519,7 +530,13 @@ fn edges_from_pts(pts: &[(f64, f64, f64)], take: usize) -> Vec<(Point2D, Point2D
             start = p;
         }
         eds.push((start, end));
-        eds
+        if reverse {
+            // this might have some artifacts when points % mid is not
+            // 0; but it should be good enough
+            eds.into_iter().map(|(a, b)| (b, a)).collect()
+        } else {
+            eds
+        }
     }
 }
 

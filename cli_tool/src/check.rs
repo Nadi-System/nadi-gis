@@ -29,6 +29,12 @@ pub struct CliArgs {
     /// Print progress
     #[arg(short, long)]
     verbose: bool,
+    /// reverse the direction of streamlines
+    ///
+    /// Algorithm assumes the geometry starts from upstream and goes
+    /// to downstream. If it's reverse use this flag.
+    #[arg(short, long, action)]
+    reverse: bool,
     /// Streams vector file with streams network
     #[arg(value_parser=parse_layer, value_name="STREAMS_FILE[:LAYER]")]
     streams: (PathBuf, String),
@@ -48,8 +54,11 @@ impl CliAction for CliArgs {
         let total = streams.len();
         let mut points = 0;
         for (i, (_name, geom)) in streams.iter().enumerate() {
-            let start = Point2D::new3(geom.get_point(0))?;
-
+            let mut start = Point2D::new3(geom.get_point(0))?;
+            let mut end = Point2D::new3(geom.get_point((geom.point_count() - 1) as i32))?;
+            if self.reverse {
+                (start, end) = (end, start);
+            }
             if !start_nodes.insert(start.clone()) {
                 branches.insert(start);
             }
@@ -58,8 +67,6 @@ impl CliAction for CliArgs {
                 points += 1;
                 continue;
             }
-
-            let end = Point2D::new3(geom.get_point((geom.point_count() - 1) as i32))?;
 
             if !end_nodes.insert(end.clone()) {
                 confluences.insert(end);

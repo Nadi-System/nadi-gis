@@ -34,24 +34,17 @@ import os
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtCore import QCoreApplication
 from qgis.core import (
-    QgsFeatureSink,
+    QgsCategorizedSymbolRenderer,
+    QgsMarkerSymbol,
     QgsProcessing,
     QgsProcessingAlgorithm,
-    QgsProcessingException,
-    QgsProcessingFeedback,
+    QgsProcessingLayerPostProcessorInterface,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterFeatureSource,
     QgsProcessingParameterVectorDestination,
-    QgsProcessingParameterField,
-    QgsProcessingUtils,
-    QgsProcessingLayerPostProcessorInterface,
-    QgsRunProcess,
-    QgsVectorLayer,
-    QgsMarkerSymbol,
-    QgsCategorizedSymbolRenderer,
     QgsRendererCategory,
+    QgsVectorLayer,
 )
-from PyQt5.QtGui import QColor
 import pathlib
 from .nadi_exe import qgis_nadi_proc
 
@@ -67,6 +60,7 @@ class NadiCheck(QgsProcessingAlgorithm):
 
     NODE_TYPES = 'NODE_TYPES'
     STREAMS = 'STREAMS'
+    REVERSE = 'REVERSE'
 
     def initAlgorithm(self, config):
         # We add the input vector features source. It can have any kind of
@@ -76,6 +70,13 @@ class NadiCheck(QgsProcessingAlgorithm):
                 self.STREAMS,
                 self.tr('Input Streams'),
                 [QgsProcessing.TypeVectorLine]
+            )
+        )
+        self.addParameter(
+            QgsProcessingParameterBoolean(
+                self.REVERSE,
+                self.tr('Reverse Stream Network Direction'),
+                False
             )
         )
 
@@ -90,11 +91,16 @@ class NadiCheck(QgsProcessingAlgorithm):
         streams = self.parameterAsCompatibleSourceLayerPathAndLayerName(
             parameters, self.STREAMS, context, ["gpkg"]
         )
+        reverse = self.parameterAsBool(
+            parameters, self.REVERSE, context
+        )
         node_cat = self.parameterAsOutputLayer(
             parameters, self.NODE_TYPES, context
         )
         cmd = ["check"]
-        if streams[1] is "":
+        if reverse:
+            cmd += ["--reverse"]
+        if streams[1] == "":
             streams_file = f"{pathlib.Path(streams[0]).as_posix()}"
         else:
             streams_file = f"{pathlib.Path(streams[0]).as_posix()}::{streams[1]}"
@@ -122,7 +128,7 @@ class NadiCheck(QgsProcessingAlgorithm):
 
     def displayName(self):
         return self.tr("Check Streams")
-    
+
     def icon(self):
         return QIcon(os.path.join(os.path.dirname(__file__), "check.png"))
 
@@ -139,9 +145,7 @@ class NadiCheck(QgsProcessingAlgorithm):
         return NadiCheck()
 
 
-
 class LayerPostProcessor(QgsProcessingLayerPostProcessorInterface):
-
     instance = None
 
     def postProcessLayer(self, layer, context, feedback):
@@ -149,10 +153,10 @@ class LayerPostProcessor(QgsProcessingLayerPostProcessorInterface):
             return
 
         cats = QgsCategorizedSymbolRenderer("category", [
-            get_sym("Origin", False, color='gray', size=0.5),
-            get_sym("Confluence", False, color='green', size=0.8),
-            get_sym("Branch", True, color='red'),
-            get_sym("Outlet", True, color='blue', size=4.0),
+                get_sym("Origin", False, color='gray', size=0.5),
+                get_sym("Confluence", False, color='green', size=0.8),
+                get_sym("Branch", True, color='red'),
+                get_sym("Outlet", True, color='blue', size=4.0),
         ])
         layer.setRenderer(cats)
 
@@ -162,11 +166,11 @@ class LayerPostProcessor(QgsProcessingLayerPostProcessorInterface):
         return LayerPostProcessor.instance
 
 
-def get_sym(val, _render, **props):
-    s = QgsRendererCategory()
-    s.setValue(val)
-    s.setLabel(val)
-    # this was buggy (didn't work)
-    # s.setRenderState(render)
-    s.setSymbol(QgsMarkerSymbol.createSimple(props))
-    return s
+def get_sym(val, render, **props):
+    return QgsRendererCategory(
+        val,
+        QgsMarkerSymbol.createSimple(props),
+        val,
+        render,
+        "node_cat_"+val.lower()
+        )

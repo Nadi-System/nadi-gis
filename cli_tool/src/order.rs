@@ -25,6 +25,12 @@ pub struct CliArgs {
     /// Overwrite the output file if it exists
     #[arg(short = 'O', long)]
     overwrite: bool,
+    /// reverse the direction of streamlines
+    ///
+    /// Algorithm assumes the geometry starts from upstream and goes
+    /// to downstream. If it's reverse use this flag.
+    #[arg(short, long, action)]
+    reverse: bool,
 
     /// Streams vector file with streams network
     #[arg(value_parser=parse_layer, value_name="STREAMS_FILE[:LAYER]")]
@@ -38,7 +44,7 @@ impl CliAction for CliArgs {
     fn run(self) -> Result<(), anyhow::Error> {
         let streams_data = Dataset::open(&self.streams.0).unwrap();
         let mut streams_lyr = streams_data.layer_by_name(&self.streams.1).unwrap();
-        let points = get_endpoints(&mut streams_lyr, self.verbose)?;
+        let points = get_endpoints(&mut streams_lyr, self.verbose, self.reverse)?;
         if points.is_empty() {
             eprintln!("Empty file, nothing to do.");
             return Ok(());
@@ -173,6 +179,7 @@ fn write_layer(
 pub fn get_endpoints(
     layer: &mut Layer,
     verbose: bool,
+    reverse: bool,
 ) -> Result<Vec<(Point2D, Point2D)>, anyhow::Error> {
     let total = layer.feature_count() as usize;
     layer
@@ -203,6 +210,11 @@ pub fn get_endpoints(
             })
         })
         .flatten()
-        .map(|(a, b)| Ok((Point2D::new3(a)?, Point2D::new3(b)?)))
+        .map(|(mut a, mut b)| {
+            if reverse {
+                (a, b) = (b, a);
+            }
+            Ok((Point2D::new3(a)?, Point2D::new3(b)?))
+        })
         .collect()
 }
