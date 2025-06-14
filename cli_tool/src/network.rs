@@ -541,15 +541,5 @@ fn edges_from_pts(pts: &[(f64, f64, f64)], take: usize, reverse: bool) -> Vec<(P
 }
 
 fn valid_node_name(n: &str) -> bool {
-    let mut chars = n.chars();
-    match chars.next() {
-        Some('_') => (),
-        Some(c) => {
-            if !c.is_alphabetic() {
-                return false;
-            }
-        }
-        None => return true,
-    }
-    chars.all(|c| c == '_' || c.is_alphanumeric())
+    n.chars().all(|c| c == '_' || c.is_alphanumeric())
 }
