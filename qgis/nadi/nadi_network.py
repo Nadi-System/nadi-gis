@@ -116,8 +116,7 @@ class NadiNetwork(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterVectorDestination(
                 self.SNAP_LINES,
-                self.tr('Snap Lines'),
-                [QgsProcessing.TypeVectorLine]
+                self.tr('Snap Lines')
             )
         )
 
