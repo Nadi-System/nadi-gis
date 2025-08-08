@@ -549,7 +549,8 @@ fn valid_node_name(n: &str) -> bool {
                 return false;
             }
         }
-        None => return true,
+        // empty name not valid
+        None => return false,
     }
     chars.all(|c| c == '_' || c.is_alphanumeric())
 }

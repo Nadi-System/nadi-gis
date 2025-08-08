@@ -1,19 +1,15 @@
-# This file contains metadata for your plugin.
-
-# This file should be included when you package your plugin.# Mandatory items:
-
 [general]
 name=Nadi
 qgisMinimumVersion=3.0
 description=Nadi (River) connections tool
-version=0.1
+about=NADI (Network Analysis and Data Integration) can make river connections based on the streams vector file and points of interests.
+version=0.2.1
 author=Gaurav Atreya
 email=allmanpride@gmail.com
 
-about=NADI (Network Analysis and Data Integration) can make river connections based on the streams vector file and points of interests.
 
-tracker=https://github.com/Nadi-System/nadi-gis/issues
 repository=https://github.com/Nadi-System/nadi-gis
+tracker=https://github.com/Nadi-System/nadi-gis/issues
 # End of mandatory metadata
 
 # Recommended items:
@@ -22,8 +18,7 @@ hasProcessingProvider=yes
 # Uncomment the following line and add your changelog:
 # changelog=
 
-# Tags are comma separated with spaces allowed
-tags=processing, network analysis, routing
+tags=processing, network analysis, routing, river, river network
 
 homepage=https://github.com/Nadi-System/nadi-gis
 category=Analysis
@@ -40,7 +35,7 @@ deprecated=False
 # plugin_dependencies=
 
 Category of the plugin: Raster, Vector, Database or Web
-# category=
+category=Vector
 
 # If the plugin can run on QGIS Server.
 server=False
