@@ -90,7 +90,7 @@ impl GeoInfo {
 
     pub fn usgs_url(&self, site_no: &str) -> String {
         let query = self.usgs_query();
-        format!("https://api.water.usgs.gov/nldi/linked-data/nwissite/USGS-{site_no}/{query}")
+        format!("https://api.water.usgs.gov/nldi/linked-data/wqp/USGS-{site_no}/{query}")
     }
 
     pub fn download(&self, site_no: &str, dir: &PathBuf, _verbose: bool) {
