@@ -10,16 +10,111 @@ mod gis {
     use nadi_core::abi_stable::std_types::{RSome, RString};
     use nadi_core::anyhow::{Context, Result};
     use nadi_core::attrs::{Date, DateTime, FromAttribute, FromAttributeRelaxed, HasAttributes};
-    use nadi_core::nadi_plugin::network_func;
+    use nadi_core::nadi_plugin::{env_func, network_func};
     use nadi_core::prelude::*;
     use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
+
+    fn gis_value_to_attr(value: FieldValue) -> Option<Attribute> {
+        match value {
+            FieldValue::IntegerValue(i) => Some(Attribute::Integer(i as i64)),
+            FieldValue::Integer64Value(i) => Some(Attribute::Integer(i)),
+            FieldValue::StringValue(i) => Some(Attribute::String(RString::from(i))),
+            FieldValue::RealValue(i) => Some(Attribute::Float(i)),
+            FieldValue::DateValue(d) => Some(Attribute::Date(Date::new(
+                d.year() as u16,
+                d.month() as u8,
+                d.day() as u8,
+            ))),
+            _ => None,
+        }
+    }
+
+    /// Show the layers of the GIS file as a list
+    #[env_func]
+    fn layers(
+        /// Path to the GIS file
+        file: PathBuf,
+    ) -> Result<Vec<String>> {
+        let data = Dataset::open(file)?;
+        Ok(data.layers().map(|l| l.name().to_string()).collect())
+    }
+
+    /// Show the fields in the GIS file layer as a list
+    #[env_func]
+    fn fields(
+        /// Path to the GIS file
+        file: PathBuf,
+        /// Layer of the file, if not given defaults to the first layer
+        layer: Option<String>,
+    ) -> Result<Vec<String>> {
+        let data = Dataset::open(file)?;
+        let layer = if let Some(lyr) = layer {
+            data.layer_by_name(&lyr)
+                .context("Given Layer doesn't exist")?
+        } else {
+            data.layer(0)?
+        };
+        let defn = Defn::from_layer(&layer);
+        Ok(defn.fields().map(|f| f.name().to_string()).collect())
+    }
+
+    /// Show the fields in the GIS file layer as a list
+    #[env_func]
+    fn features_count(
+        /// Path to the GIS file
+        file: PathBuf,
+        /// Layer of the file, if not given defaults to the first layer
+        layer: Option<String>,
+    ) -> Result<usize> {
+        let data = Dataset::open(file)?;
+        let mut layer = if let Some(lyr) = layer {
+            data.layer_by_name(&lyr)
+                .context("Given Layer doesn't exist")?
+        } else {
+            data.layer(0)?
+        };
+        Ok(layer.features().count())
+    }
+
+    /// Returns the values from a feature in a GIS file from its index
+    #[env_func(feature = 0u64, sanitize = false)]
+    fn values(
+        /// Path to the GIS file
+        file: PathBuf,
+        /// Layer of the file, if not given defaults to the first layer
+        layer: Option<String>,
+        /// Feature to get the attribute values from
+        feature: u64,
+        /// Sanitize the key
+        sanitize: bool,
+    ) -> Result<Option<AttrMap>> {
+        let data = Dataset::open(file)?;
+        let layer = if let Some(lyr) = layer {
+            data.layer_by_name(&lyr)
+                .context("Given Layer doesn't exist")?
+        } else {
+            data.layer(0)?
+        };
+        let res = match layer.feature(feature) {
+            Some(feat) => Ok(Some(
+                feat.fields()
+                    .filter_map(|(f, v)| {
+                        let f = if sanitize { sanitize_key(&f) } else { f };
+                        v.and_then(gis_value_to_attr).map(|v| (RString::from(f), v))
+                    })
+                    .collect(),
+            )),
+            None => Ok(None),
+        };
+        res
+    }
 
     /// Load network from a GIS file
     ///
     /// Loads the network from a gis file containing the edges in fields
     #[network_func(ignore_null = false)]
-    fn gis_load_network(
+    fn load_network(
         net: &mut Network,
         /// GIS file to load (can be any format GDAL can understand)
         file: PathBuf,
@@ -76,7 +171,7 @@ mod gis {
     /// The function reads a GIS file in any format (CSV, GPKG, SHP,
     /// JSON, etc) and loads their fields as attributes to the nodes.
     #[network_func(geometry = "GEOM", ignore = "", sanitize = true, err_no_node = false)]
-    fn gis_load_attrs(
+    fn load_attrs(
         net: &mut Network,
         /// GIS file to load (can be any format GDAL can understand)
         file: PathBuf,
@@ -130,28 +225,7 @@ mod gis {
                 .filter(|(f, _)| !ignore.contains(f))
                 .filter_map(|(f, v)| {
                     let f = if sanitize { sanitize_key(&f) } else { f };
-                    let f = RString::from(f);
-                    if let Some(val) = v {
-                        match val {
-                            FieldValue::IntegerValue(i) => Some((f, Attribute::Integer(i as i64))),
-                            FieldValue::Integer64Value(i) => Some((f, Attribute::Integer(i))),
-                            FieldValue::StringValue(i) => {
-                                Some((f, Attribute::String(RString::from(i))))
-                            }
-                            FieldValue::RealValue(i) => Some((f, Attribute::Float(i))),
-                            FieldValue::DateValue(d) => Some((
-                                f,
-                                Attribute::Date(Date::new(
-                                    d.year() as u16,
-                                    d.month() as u8,
-                                    d.day() as u8,
-                                )),
-                            )),
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    }
+                    v.and_then(gis_value_to_attr).map(|v| (RString::from(f), v))
                 });
             n.lock().attr_map_mut().extend(attrs);
         }
@@ -160,7 +234,7 @@ mod gis {
 
     /// Save GIS file of the connections
     #[network_func(layer = "network")]
-    fn gis_save_connections(
+    fn save_connections(
         net: &Network,
         file: PathBuf,
         geometry: String,
@@ -231,12 +305,12 @@ mod gis {
     }
 
     /// Save GIS file of the nodes
-    #[network_func(attrs=HashMap::new(), layer="nodes")]
-    fn gis_save_nodes(
+    #[network_func(fields=HashMap::new(), layer="nodes")]
+    fn save_nodes(
         net: &Network,
         file: PathBuf,
         geometry: String,
-        attrs: HashMap<String, String>,
+        fields: HashMap<String, String>,
         driver: Option<String>,
         layer: String,
         filter: Option<Vec<bool>>,
@@ -255,7 +329,7 @@ mod gis {
             ty: gdal_sys::OGRwkbGeometryType::wkbPoint,
             ..Default::default()
         })?;
-        let fields: Vec<(String, (u32, Attr2FieldValue))> = attrs
+        let fields: Vec<(String, (u32, Attr2FieldValue))> = fields
             .into_iter()
             .map(|(k, v)| Ok((k, type_name_to_field(&v)?)))
             .collect::<Result<_, String>>()

@@ -15,7 +15,7 @@ chrono = "0.4.38"
 colored = "2.1.0"
 gdal = "0.18.0"
 gdal-sys = "0.11.0"
-nadi_core = {version = "0.7.0", path = "../../nadi-system/nadi_core", features=["chrono"]}
+nadi_core = {version = "0.8.0", path = "../../nadi-system/nadi_core", features=["chrono"]}
 text-diff = "0.4.0"
 toml = { version = "0.8.19", features = ["preserve_order"] }
 
