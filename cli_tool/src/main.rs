@@ -68,6 +68,8 @@ subcommands! {
     order Order,
     /// Find the network information from streams file between points
     network Network,
+    /// Snap the points to the geometries in the streams
+    snap Snap,
 }
 
 #[derive(Parser)]
