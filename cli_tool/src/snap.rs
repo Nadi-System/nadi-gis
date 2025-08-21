@@ -52,8 +52,11 @@ impl CliAction for CliArgs {
         let points = points_data.layer_by_name(&self.points.1).unwrap();
 
         let streams_data = Dataset::open(&self.streams.0).unwrap();
-        let streams = streams_data.layer_by_name(&self.streams.1).unwrap();
+        let mut streams = streams_data.layer_by_name(&self.streams.1).unwrap();
 
+        if streams.features().next().is_none() {
+            return Err(anyhow::Error::msg("No features in streams file"));
+        }
         if self.ignore_spatial_ref || check_spatial_ref(&points, &streams).is_ok() {
             self.snap(points, streams)?;
         }
@@ -100,13 +103,19 @@ impl CliArgs {
             }
             if let Some(geom) = point.geometry() {
                 let (x, y, _) = geom.get_point(0);
-                streams_lyr.clear_spatial_filter();
-                streams_lyr.set_spatial_filter_rect(
-                    x - self.radius,
-                    y - self.radius,
-                    x + self.radius,
-                    y + self.radius,
-                );
+                // recursively search in larger radius if no features found
+                let mut r = self.radius;
+                let mut loop_ind = 0;
+                while loop_ind < 10 {
+                    streams_lyr.clear_spatial_filter();
+                    streams_lyr.set_spatial_filter_rect(x - r, y - r, x + r, y + r);
+                    if streams_lyr.features().next().is_some() {
+                        break;
+                    }
+                    r *= 2.0;
+                    loop_ind += 1;
+                }
+
                 let stream_points: Vec<(f64, f64)> = streams_lyr
                     .features()
                     .filter_map(|f| f.geometry().cloned())
@@ -133,9 +142,9 @@ impl CliArgs {
                     Some(p) => p,
                     None => {
                         // only happens if the tree is empty I think (doc not present)
-                        eprintln!("{:?}", (x, y));
-                        eprintln!("{:?}", all_points.iter().next());
-                        panic!("Snap failed");
+                        eprintln!("SNAP Failed at: {:?}", (x, y));
+                        // happened at 57%, could be due to there not being any streams nearby
+                        continue;
                     }
                 };
                 let mut geom = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbPoint)?;
@@ -153,7 +162,7 @@ impl CliArgs {
         txn.commit()?;
 
         if self.verbose {
-            println!("\rCompleted : {}% ({}/{})", 100, total, total);
+            println!("\nCompleted : {}% ({}/{})", 100, total, total);
         }
         Ok(())
     }

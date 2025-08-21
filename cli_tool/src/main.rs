@@ -68,7 +68,13 @@ subcommands! {
     order Order,
     /// Find the network information from streams file between points
     network Network,
-    /// Find the network information from streams file between points
+    /// Find the network information from big stream file
+    ///
+    /// This command does not load the stream file into RAM and
+    /// process it, instead choosing to load only a subset at one
+    /// time. This makes it slow, but allows the algorithm to run for
+    /// bigger than RAM datasets. If your dataset is small, use the
+    /// `network` command instead.
     bignetwork BigNetwork,
     /// Snap the points to the geometries in the streams
     snap Snap,
