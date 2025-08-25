@@ -32,9 +32,9 @@ pub struct CliArgs {
     /// Overwrite the output file if it exists
     #[arg(short = 'O', long)]
     overwrite: bool,
-    /// Search Radius for the output node
-    #[arg(short, long, default_value = "0.5")]
-    radius: f64,
+    /// Threshold for gap between the stream lines to assume they are connected
+    #[arg(short, long, default_value = "0.0000005")]
+    threshold: f64,
     /// Points file with points of interest
     #[arg(value_parser=parse_layer, value_name="POINTS_FILE[::LAYER]")]
     points: (PathBuf, String),
@@ -81,7 +81,16 @@ impl CliArgs {
         if self.verbose {
             println!("Start Connection Seeking");
         }
-        for (prog, point) in points_lyr.features().enumerate() {
+        let mut prog = 0;
+        for (fid, pt) in &points {
+            let point = match points_lyr.feature(*fid as u64) {
+                Some(p) => p,
+                None => {
+                    eprintln!("Error in feauture");
+                    continue;
+                }
+            };
+            prog += 1;
             if self.verbose {
                 print!(
                     "\rReading Points: {}% ({}/{})",
@@ -92,60 +101,40 @@ impl CliArgs {
                 std::io::stdout().flush().ok();
             }
             if let Some(geom) = point.geometry() {
-                let (x, y, _) = geom.get_point(0);
-                let pt = Point2D::new2((x, y))?;
-                streams_lyr.clear_spatial_filter();
-                streams_lyr.set_spatial_filter_rect(
-                    x - self.radius,
-                    y - self.radius,
-                    x + self.radius,
-                    y + self.radius,
-                );
-                let stream_points: Vec<(f64, f64)> = streams_lyr
-                    .features()
-                    .filter_map(|f| f.geometry().cloned())
-                    .flat_map(|g1| {
-                        let mut out = Vec::new();
-                        let gc = g1.geometry_count();
-                        // for handling multi-geometry as well
-                        if gc > 0 {
-                            (0..gc)
-                                .map(|j| {
-                                    let g = g1.get_geometry(j);
-                                    g.get_points(&mut out);
-                                })
-                                .collect()
-                        } else {
-                            g1.get_points(&mut out);
-                        }
-                        out
-                    })
-                    .map(|(x, y, _)| (x, y))
-                    .collect();
-                let edges: Vec<(Point2D, Point2D)> = stream_points
-                    .iter()
-                    .zip(stream_points[1..].iter())
-                    .map(|(s, e)| (Point2D::new2(*s).unwrap(), Point2D::new2(*e).unwrap()))
-                    .collect();
-                let edges: HashMap<Point2D, Point2D> = edges.into_iter().rev().collect();
-                let mut start = &pt;
-                let mut output: Option<Point2D> = None;
+                let (mut x, mut y, _) = geom.get_point(0);
+
+                let mut searching = false;
+                let mut iter = 0;
                 loop {
-                    let end = edges.get(start);
-                    if let Some(e) = end {
-                        start = e;
+                    iter += 1;
+                    // find the stream points for stream closest to the point.
+                    let stream_points: Vec<(f64, f64)> =
+                        get_next_geom_pts(&mut streams_lyr, (x, y), self.threshold, searching);
+                    if stream_points.is_empty() || stream_points.len() == 1 || iter > 10000 {
+                        eprintln!("Outlet: {:?}", pt.coord2());
+                        break;
+                    }
+                    searching = true;
+                    let points: Vec<Point2D> = stream_points
+                        .iter()
+                        .map(|s| Point2D::new2(*s).unwrap())
+                        .collect();
+                    // the point if exists in the geometry, skip
+                    // everything before it; only relevant for the
+                    // first geom; but if there is a loop, then it
+                    // breaks things
+                    let pt_inside = points.iter().find_position(|p| *p == pt).map(|p| p.0);
+                    let points: Vec<Point2D> = if let Some(ind) = pt_inside {
+                        points.into_iter().skip(ind + 1).collect()
                     } else {
+                        points.into_iter().collect()
+                    };
+                    if let Some(out) = points.iter().find(|p| points_map.contains_key(p)) {
+                        connections.push((pt.clone(), out.clone()));
                         break;
+                    } else {
+                        (x, y) = stream_points.into_iter().last().unwrap();
                     }
-                    if points_map.contains_key(&start) {
-                        output = Some(start.clone());
-                        break;
-                    }
-                }
-                if let Some(out) = output {
-                    connections.push((pt, out));
-                } else {
-                    eprintln!("Outlet: {:?}", pt.coord2());
                 }
             }
         }
@@ -187,11 +176,11 @@ impl CliArgs {
                     ft.set_field(idx * 2, &value)?;
                 }
                 // out
-                if let Some(value) = points_lyr
-                    .feature(points_map[&end] as u64)
-                    .unwrap()
-                    .field(idx)?
-                {
+                if let Some(value) = if let Some(v) = points_lyr.feature(points_map[&end] as u64) {
+                    v.field(idx)?
+                } else {
+                    continue;
+                } {
                     ft.set_field(idx * 2 + 1, &value)?;
                 }
             }
@@ -204,4 +193,60 @@ impl CliArgs {
         }
         Ok(())
     }
+}
+
+fn get_next_geom_pts(
+    layer: &mut Layer,
+    coord: (f64, f64),
+    radius: f64,
+    starts: bool,
+) -> Vec<(f64, f64)> {
+    layer.clear_spatial_filter();
+    layer.set_spatial_filter_rect(
+        coord.0 - radius,
+        coord.1 - radius,
+        coord.0 + radius,
+        coord.1 + radius,
+    );
+    let geoms: Vec<Vec<(f64, f64)>> = layer
+        .features()
+        .filter_map(|f| f.geometry().map(get_geom_pts))
+        .filter(|geom| {
+            (!starts) // means the geom's start point should be in the (x,y) range
+                || geom
+                    .get(0)
+                    .map(|(x, y)| {
+                        (*x < (coord.0 + radius))
+                            & (*x > (coord.0 - radius))
+                            & (*y < (coord.1 + radius))
+                            & (*y > (coord.1 - radius))
+                    })
+                    .unwrap_or_default()
+        })
+        .collect();
+    match &geoms[..] {
+        [] => Vec::new(),
+        [g] => g.clone(),
+        [g, ..] => {
+            // multiple streams near the point, take the first one for now (assumes threashold is super small)
+            g.clone()
+        }
+    }
+}
+
+fn get_geom_pts(geom: &Geometry) -> Vec<(f64, f64)> {
+    let mut out = Vec::new();
+    let gc = geom.geometry_count();
+    // for handling multi-geometry as well
+    if gc > 0 {
+        (0..gc)
+            .map(|j| {
+                let g = geom.get_geometry(j);
+                g.get_points(&mut out);
+            })
+            .collect()
+    } else {
+        geom.get_points(&mut out);
+    }
+    out.into_iter().map(|(x, y, _)| (x, y)).collect()
 }

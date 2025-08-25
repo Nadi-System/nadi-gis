@@ -115,6 +115,7 @@ impl CliArgs {
                     r *= 2.0;
                     loop_ind += 1;
                 }
+                // TODO, when it can't find a point, look what's going on. Skip them properly
 
                 let stream_points: Vec<(f64, f64)> = streams_lyr
                     .features()
