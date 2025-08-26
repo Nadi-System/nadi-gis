@@ -81,18 +81,20 @@ impl CliArgs {
         if self.verbose {
             println!("Start Connection Seeking");
         }
-        for (prog, pt) in &points {
+        let mut prog = 0u64;
+        for (fid, pt) in &points {
             if self.verbose {
+                prog += 1;
                 print!(
                     "\rReading Points: {}% ({}/{})",
-                    *prog * 100 / total,
+                    prog * 100 / total,
                     prog,
                     total
                 );
                 std::io::stdout().flush().ok();
             }
             let point = points_lyr
-                .feature(*prog)
+                .feature(*fid)
                 .expect("FID comes from this layer; should work");
             if let Some(geom) = point.geometry() {
                 let (mut x, mut y, _) = geom.get_point(0);
