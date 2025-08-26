@@ -65,41 +65,35 @@ impl CliAction for CliArgs {
 impl CliArgs {
     fn network(&self, mut points_lyr: Layer, mut streams_lyr: Layer) -> anyhow::Result<()> {
         println!("Reading Points");
-        let points: HashMap<usize, Point2D> = points_lyr
+        let points: HashMap<u64, Point2D> = points_lyr
             .features()
-            .enumerate()
-            .filter_map(|(i, p)| {
-                p.geometry()
+            .filter_map(|f| f.fid().map(|i| (i, f)))
+            .filter_map(|(i, f)| {
+                f.geometry()
                     .map(|g| (i, Point2D::new3(g.get_point(0)).unwrap()))
             })
             .collect();
         println!("Mapping Points");
-        let points_map: HashMap<Point2D, usize> =
+        let points_map: HashMap<Point2D, u64> =
             points.iter().map(|(k, v)| (v.clone(), *k)).collect();
         let mut connections = Vec::with_capacity(points_map.len());
-        let total = points_lyr.feature_count() as usize;
+        let total = points_lyr.feature_count();
         if self.verbose {
             println!("Start Connection Seeking");
         }
-        let mut prog = 0;
-        for (fid, pt) in &points {
-            let point = match points_lyr.feature(*fid as u64) {
-                Some(p) => p,
-                None => {
-                    eprintln!("Error in feauture");
-                    continue;
-                }
-            };
-            prog += 1;
+        for (prog, pt) in &points {
             if self.verbose {
                 print!(
                     "\rReading Points: {}% ({}/{})",
-                    prog * 100 / total,
+                    *prog * 100 / total,
                     prog,
                     total
                 );
                 std::io::stdout().flush().ok();
             }
+            let point = points_lyr
+                .feature(*prog)
+                .expect("FID comes from this layer; should work");
             if let Some(geom) = point.geometry() {
                 let (mut x, mut y, _) = geom.get_point(0);
 
@@ -142,10 +136,10 @@ impl CliArgs {
         let mut out_data = gdal_update_or_create(&self.output.0, &self.driver, self.overwrite)?;
         let mut txn = out_data.start_transaction().expect("Transaction failed");
 
-        let lyr_name = self.output.1.as_deref().unwrap_or("Snapped");
+        let lyr_name = self.output.1.as_deref().unwrap_or("Network");
         let mut layer = txn.create_layer(LayerOptions {
             name: lyr_name,
-            ty: gdal_sys::OGRwkbGeometryType::wkbPoint,
+            ty: gdal_sys::OGRwkbGeometryType::wkbLineString,
             ..Default::default()
         })?;
         let pts_defn = Defn::from_layer(&points_lyr)
@@ -166,22 +160,20 @@ impl CliArgs {
             geom.add_point_2d(start.coord2());
             geom.add_point_2d(end.coord2());
             ft.set_geometry(geom)?;
-            for idx in 0..pts_defn.len() {
-                // inp
-                if let Some(value) = points_lyr
-                    .feature(points_map[&start] as u64)
-                    .unwrap()
-                    .field(idx)?
-                {
-                    ft.set_field(idx * 2, &value)?;
+            // inp
+            if let Some(feat) = points_lyr.feature(points_map[&start]) {
+                for idx in 0..pts_defn.len() {
+                    if let Some(value) = feat.field(idx)? {
+                        ft.set_field(idx * 2, &value)?;
+                    }
                 }
-                // out
-                if let Some(value) = if let Some(v) = points_lyr.feature(points_map[&end] as u64) {
-                    v.field(idx)?
-                } else {
-                    continue;
-                } {
-                    ft.set_field(idx * 2 + 1, &value)?;
+            }
+            // out
+            if let Some(feat) = points_lyr.feature(points_map[&end]) {
+                for idx in 0..pts_defn.len() {
+                    if let Some(value) = feat.field(idx)? {
+                        ft.set_field(idx * 2 + 1, &value)?;
+                    }
                 }
             }
             ft.create(&mut layer)?;
