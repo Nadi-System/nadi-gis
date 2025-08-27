@@ -77,6 +77,7 @@ impl CliArgs {
         let points_map: HashMap<Point2D, u64> =
             points.iter().map(|(k, v)| (v.clone(), *k)).collect();
         let mut connections = Vec::with_capacity(points_map.len());
+        let mut outlets = Vec::with_capacity(points_map.len());
         let total = points_lyr.feature_count();
         if self.verbose {
             println!("Start Connection Seeking");
@@ -107,6 +108,7 @@ impl CliArgs {
                     let stream_points: Vec<(f64, f64)> =
                         get_next_geom_pts(&mut streams_lyr, (x, y), self.threshold, searching);
                     if stream_points.is_empty() || stream_points.len() == 1 || iter > 10000 {
+                        outlets.push((pt.coord2(), (x, y)));
                         eprintln!("Outlet: {:?}", pt.coord2());
                         break;
                     }
@@ -180,6 +182,21 @@ impl CliArgs {
             }
             ft.create(&mut layer)?;
         }
+
+        let mut layer2 = txn.create_layer(LayerOptions {
+            name: "Outlets",
+            ty: gdal_sys::OGRwkbGeometryType::wkbLineString,
+            ..Default::default()
+        })?;
+        let defn = Defn::from_layer(&layer2);
+        for (start, end) in outlets {
+            let mut ft = Feature::new(&defn)?;
+            let mut geom = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbLineString)?;
+            geom.add_point_2d(start);
+            geom.add_point_2d(end);
+            ft.set_geometry(geom)?;
+            ft.create(&mut layer2)?;
+        }
         txn.commit()?;
 
         if self.verbose {
@@ -202,12 +219,12 @@ fn get_next_geom_pts(
         coord.0 + radius,
         coord.1 + radius,
     );
-    let geoms: Vec<Vec<(f64, f64)>> = layer
+    let geoms: Vec<Geometry> = layer
         .features()
-        .filter_map(|f| f.geometry().map(get_geom_pts))
+        .filter_map(|f| f.geometry().cloned())
         .filter(|geom| {
             (!starts) // means the geom's start point should be in the (x,y) range
-                || geom
+                || get_geom_pts(geom)
                     .get(0)
                     .map(|(x, y)| {
                         (*x < (coord.0 + radius))
@@ -220,10 +237,14 @@ fn get_next_geom_pts(
         .collect();
     match &geoms[..] {
         [] => Vec::new(),
-        [g] => g.clone(),
-        [g, ..] => {
-            // multiple streams near the point, take the first one for now (assumes threashold is super small)
-            g.clone()
+        [g] => get_geom_pts(g),
+        [..] => {
+            // multiple streams near the point, let's take the longest one, hopefully that's the main one
+            let g = geoms
+                .iter()
+                .max_by(|a, b| a.length().partial_cmp(&b.length()).unwrap())
+                .unwrap_or(&geoms[0]);
+            get_geom_pts(g)
         }
     }
 }
