@@ -68,11 +68,19 @@ impl CliAction for CliArgs {
         let mut progress = 0;
         let total = tips.clone().count();
         for mut pt in tips {
+            let mut iter = 0;
             while let Some(out) = edges.get(pt) {
                 if let Some(o) = order.get_mut(&(pt, out)) {
                     *o += 1;
                 }
                 pt = out;
+                iter += 1;
+                // idk if it was in infinite loop, need to have a
+                // check system for that, maybe keep a hashset of
+                // visited nodes each time
+                if iter > 10000 {
+                    break;
+                }
             }
             if self.verbose {
                 progress += 1;
