@@ -5,7 +5,7 @@ use gdal::vector::{
 };
 use gdal::{Dataset, Driver, DriverManager, GdalOpenFlags, Metadata};
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
@@ -64,26 +64,45 @@ impl CliAction for CliArgs {
 impl CliArgs {
     fn network(&self, mut points_lyr: Layer, mut streams_lyr: Layer) -> anyhow::Result<()> {
         println!("Reading Points");
-        let points: HashMap<u64, Point2D> = points_lyr
+        let points: HashMap<u64, (Point2D, Point2D)> = points_lyr
             .features()
             .filter_map(|f| f.fid().map(|i| (i, f)))
             .filter_map(|(i, f)| {
-                f.geometry()
-                    .map(|g| (i, Point2D::new3(g.get_point(0)).unwrap()))
+                f.geometry().map(|g| {
+                    let p = Point2D::new3(g.get_point(0)).unwrap();
+                    (i, (p.clone(), p))
+                })
             })
             .collect();
         println!("Mapping Points");
-        let points_map: HashMap<Point2D, u64> =
-            points.iter().map(|(k, v)| (v.clone(), *k)).collect();
-        let mut connections = Vec::with_capacity(points_map.len());
-        let mut outlets = Vec::with_capacity(points_map.len());
+        let mut connections = Vec::with_capacity(points.len());
+        let mut outlets = Vec::with_capacity(points.len());
+        let mut found_conn: HashSet<u64> = HashSet::with_capacity(points.len());
+        // This clears out the points with duplicate locations by connecting them to each other
+        let mut points_map: HashMap<Point2D, u64> = HashMap::with_capacity(points.len());
+        points
+            .iter()
+            .for_each(|(k, v)| match points_map.entry(v.0.clone()) {
+                Entry::Vacant(v) => {
+                    v.insert(*k);
+                }
+                Entry::Occupied(o) => {
+                    found_conn.insert(*k);
+                    connections.push((*k, v.0.clone()));
+                }
+            });
         if self.verbose {
             println!("Start Connection Seeking");
         }
         let (sender, receiver) = mpsc::channel();
-        let points_to_process: Arc<Mutex<Vec<_>>> =
-            Arc::new(Mutex::new(points.clone().into_iter().collect()));
-        for _ in 0..10 {
+        let points_to_process: Arc<Mutex<VecDeque<_>>> = Arc::new(Mutex::new(
+            points
+                .clone()
+                .into_iter()
+                .filter(|(i, _)| !found_conn.contains(i))
+                .collect(),
+        ));
+        for _ in 0..16 {
             let lyr = self.streams.clone();
             let pts_map = points_map.clone();
             let pts_proc = points_to_process.clone();
@@ -92,7 +111,7 @@ impl CliArgs {
                 let streams_data = Dataset::open(&lyr.0).unwrap();
                 let mut streams = streams_data.layer_by_name(&lyr.1).unwrap();
                 loop {
-                    let val = pts_proc.lock().unwrap().pop();
+                    let val = pts_proc.lock().unwrap().pop_front();
                     if let Some((fid, pt)) = val {
                         find_connections(&mut streams, &pts_map, fid, pt, &tx);
                     } else {
@@ -102,23 +121,47 @@ impl CliArgs {
             });
         }
 
+        drop(sender);
+
         let mut prog = 0u64;
         let mut total = points_lyr.feature_count();
+        let mut branch_counts: HashMap<u64, usize> = HashMap::new();
         for msg in receiver {
-            prog += 1;
             match msg.resolution {
                 Resolution::Branch => {
-                    total += 1;
-                    find_connections(&mut streams_lyr, &points_map, msg.fid, msg.outlet, &sender);
+                    if found_conn.contains(&msg.fid) {
+                        continue;
+                    }
+                    let count = branch_counts.entry(msg.fid).or_default();
+                    *count += 1;
+                    // I don't know what a reasonable value here is;
+                    // how many branches are too many branches, maybe
+                    // a way to cache the branches and reuse them for
+                    // other connections would help reduce the
+                    // processing.
+                    if *count < 10 {
+                        // one for this, another for NotFound or Found we'll get later
+                        total += 2;
+                        points_to_process
+                            .lock()
+                            .unwrap()
+                            .push_back((msg.fid, (msg.input, msg.outlet)));
+                    } else {
+                        continue;
+                    }
                 }
                 Resolution::NotFound => {
-                    eprintln!("Outlet: {:?}", msg.input);
+                    if !branch_counts.contains_key(&msg.fid) {
+                        eprintln!("Outlet: {:?}", msg.input);
+                    }
                     outlets.push((msg.fid, msg.outlet));
                 }
                 Resolution::Found => {
+                    found_conn.insert(msg.fid);
                     connections.push((msg.fid, msg.outlet));
                 }
             }
+            prog += 1;
             if self.verbose {
                 print!(
                     "\rProcessing Points: {}% ({}/{})",
@@ -128,10 +171,10 @@ impl CliArgs {
                 );
                 std::io::stdout().flush().ok();
             }
-            if prog == total {
-                // without this there might be infinite loop
-                break;
-            }
+            // if prog == total {
+            //     // without this there might be infinite loop; drop(sender) avoids that
+            //     break;
+            // }
         }
 
         let mut out_data = gdal_update_or_create(&self.output.0, &self.driver, self.overwrite)?;
@@ -190,7 +233,7 @@ impl CliArgs {
             ..Default::default()
         })?;
         let defn = Defn::from_layer(&layer2);
-        for (start, end) in outlets {
+        for (start, end) in outlets.into_iter().filter(|(i, _)| !found_conn.contains(i)) {
             let (st_x, st_y, _) = points_lyr
                 .feature(start)
                 .and_then(|f| f.geometry().map(|g| g.get_point(0)))
@@ -234,10 +277,10 @@ fn find_connections(
     streams: &mut Layer,
     points_map: &HashMap<Point2D, u64>,
     fid: u64,
-    point: Point2D,
+    point: (Point2D, Point2D),
     sender: &Sender<Message>,
 ) {
-    let (mut x, mut y) = point.coord2();
+    let (mut x, mut y) = point.1.coord2();
     let mut searching = false;
     let mut iter = 0;
 
@@ -248,7 +291,7 @@ fn find_connections(
         if stream_points.is_empty() || iter > MAX_ITER {
             _ = sender.send(Message {
                 fid,
-                input: point.clone(),
+                input: point.0.clone(),
                 outlet: Point2D::new2((x, y)).unwrap(),
                 resolution: Resolution::NotFound,
             });
@@ -264,7 +307,7 @@ fn find_connections(
         // everything before it; only relevant for the
         // first geom; but if there is a loop, then it
         // breaks things
-        let pt_inside = points.iter().find_position(|p| *p == &point).map(|p| p.0);
+        let pt_inside = points.iter().find_position(|p| *p == &point.1).map(|p| p.0);
         let points: Vec<Point2D> = if let Some(ind) = pt_inside {
             points.into_iter().skip(ind + 1).collect()
         } else {
@@ -273,7 +316,7 @@ fn find_connections(
         if let Some(out) = points.iter().find(|p| points_map.contains_key(p)) {
             _ = sender.send(Message {
                 fid,
-                input: point.clone(),
+                input: point.0.clone(),
                 outlet: out.clone(),
                 resolution: Resolution::Found,
             });
@@ -284,7 +327,7 @@ fn find_connections(
                     // should already be covered by if stream_points.is_empty()
                     _ = sender.send(Message {
                         fid,
-                        input: point.clone(),
+                        input: point.0.clone(),
                         outlet: Point2D::new2((x, y)).unwrap(),
                         resolution: Resolution::NotFound,
                     });
@@ -300,7 +343,7 @@ fn find_connections(
                             // if they converge it's fine
                             _ = sender.send(Message {
                                 fid,
-                                input: point.clone(),
+                                input: point.0.clone(),
                                 outlet: Point2D::new2((*x1, *y1)).unwrap(),
                                 resolution: Resolution::Branch,
                             });
