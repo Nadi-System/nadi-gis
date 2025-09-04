@@ -57,7 +57,13 @@ impl CliAction for CliArgs {
         if self.verbose {
             println!("\nCreating Edges")
         }
-        let edges: HashMap<&Point2D, &Point2D> = points.iter().rev().map(|(s, e)| (s, e)).collect();
+        let edges: HashMap<&Point2D, &Point2D> = points
+            .iter()
+            .rev()
+            // if they are equal we get into infinite loop
+            .filter(|(s, e)| s.coord2() != e.coord2())
+            .map(|(s, e)| (s, e))
+            .collect();
         if self.verbose {
             println!("\nDetecting leaf nodes")
         }
@@ -65,10 +71,19 @@ impl CliAction for CliArgs {
         let no_tips: HashSet<&Point2D> = edges.iter().map(|(_, &e)| e).collect();
         let tips = tips.difference(&no_tips);
 
+        if self.verbose {
+            println!("\nWorking in leaf nodes")
+        }
         let mut progress = 0;
         let total = tips.clone().count();
         for mut pt in tips {
+            let mut visited = HashSet::new();
             while let Some(out) = edges.get(pt) {
+                visited.insert(pt);
+                if visited.contains(out) {
+                    println!("Loop back to previous node; skipping");
+                    break;
+                }
                 if let Some(o) = order.get_mut(&(pt, out)) {
                     *o += 1;
                 }
@@ -170,7 +185,7 @@ fn write_layer(
 
         if verbose {
             progress += 1;
-            println!("Writing Features: {}", progress * 100 / total);
+            print!("\rWriting Features: {}", progress * 100 / total);
         }
     }
     Ok(())
