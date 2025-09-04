@@ -1,15 +1,17 @@
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
-use std::fs::File;
-use std::io::{BufWriter, Write};
-use std::path::PathBuf;
-
 use anyhow::{bail, Context};
 use clap::Args;
 use gdal::vector::{
     Defn, Feature, FieldDefn, FieldValue, Geometry, Layer, LayerAccess, LayerOptions, OGRFieldType,
 };
 use gdal::{Dataset, Driver, DriverManager, GdalOpenFlags, Metadata};
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs::File;
+use std::io::{BufWriter, Write};
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 use itertools::Itertools;
 use rstar::RTree;
@@ -32,9 +34,6 @@ pub struct CliArgs {
     /// Overwrite the output file if it exists
     #[arg(short = 'O', long)]
     overwrite: bool,
-    /// Threshold for gap between the stream lines to assume they are connected
-    #[arg(short, long, default_value = "0.0000005")]
-    threshold: f64,
     /// Points file with points of interest
     #[arg(value_parser=parse_layer, value_name="POINTS_FILE[::LAYER]")]
     points: (PathBuf, String),
@@ -65,74 +64,117 @@ impl CliAction for CliArgs {
 impl CliArgs {
     fn network(&self, mut points_lyr: Layer, mut streams_lyr: Layer) -> anyhow::Result<()> {
         println!("Reading Points");
-        let points: HashMap<u64, Point2D> = points_lyr
+        let points: HashMap<u64, (Point2D, Point2D)> = points_lyr
             .features()
             .filter_map(|f| f.fid().map(|i| (i, f)))
             .filter_map(|(i, f)| {
-                f.geometry()
-                    .map(|g| (i, Point2D::new3(g.get_point(0)).unwrap()))
+                f.geometry().map(|g| {
+                    let p = Point2D::new3(g.get_point(0)).unwrap();
+                    (i, (p.clone(), p))
+                })
             })
             .collect();
         println!("Mapping Points");
-        let points_map: HashMap<Point2D, u64> =
-            points.iter().map(|(k, v)| (v.clone(), *k)).collect();
-        let mut connections = Vec::with_capacity(points_map.len());
-        let total = points_lyr.feature_count();
+        let mut connections = Vec::with_capacity(points.len());
+        let mut outlets = Vec::with_capacity(points.len());
+        let mut found_conn: HashSet<u64> = HashSet::with_capacity(points.len());
+        // This clears out the points with duplicate locations by connecting them to each other
+        let mut points_map: HashMap<Point2D, u64> = HashMap::with_capacity(points.len());
+        points
+            .iter()
+            .for_each(|(k, v)| match points_map.entry(v.0.clone()) {
+                Entry::Vacant(v) => {
+                    v.insert(*k);
+                }
+                Entry::Occupied(o) => {
+                    found_conn.insert(*k);
+                    connections.push((*k, v.0.clone()));
+                }
+            });
         if self.verbose {
             println!("Start Connection Seeking");
         }
+        let (sender, receiver) = mpsc::channel();
+        let points_to_process: Arc<Mutex<VecDeque<_>>> = Arc::new(Mutex::new(
+            points
+                .clone()
+                .into_iter()
+                .filter(|(i, _)| !found_conn.contains(i))
+                .collect(),
+        ));
+        for _ in 0..16 {
+            let lyr = self.streams.clone();
+            let pts_map = points_map.clone();
+            let pts_proc = points_to_process.clone();
+            let tx = sender.clone();
+            thread::spawn(move || {
+                let streams_data = Dataset::open(&lyr.0).unwrap();
+                let mut streams = streams_data.layer_by_name(&lyr.1).unwrap();
+                loop {
+                    let val = pts_proc.lock().unwrap().pop_front();
+                    if let Some((fid, pt)) = val {
+                        find_connections(&mut streams, &pts_map, fid, pt, &tx);
+                    } else {
+                        break;
+                    }
+                }
+            });
+        }
+
+        drop(sender);
+
         let mut prog = 0u64;
-        for (fid, pt) in &points {
+        let mut total = points_lyr.feature_count();
+        let mut branch_counts: HashMap<u64, usize> = HashMap::new();
+        for msg in receiver {
+            match msg.resolution {
+                Resolution::Branch => {
+                    if found_conn.contains(&msg.fid) {
+                        continue;
+                    }
+                    let count = branch_counts.entry(msg.fid).or_default();
+                    *count += 1;
+                    // I don't know what a reasonable value here is;
+                    // how many branches are too many branches, maybe
+                    // a way to cache the branches and reuse them for
+                    // other connections would help reduce the
+                    // processing.
+                    if *count < 10 {
+                        // one for this, another for NotFound or Found we'll get later
+                        total += 2;
+                        points_to_process
+                            .lock()
+                            .unwrap()
+                            .push_back((msg.fid, (msg.input, msg.outlet)));
+                    } else {
+                        continue;
+                    }
+                }
+                Resolution::NotFound => {
+                    if !branch_counts.contains_key(&msg.fid) {
+                        eprintln!("Outlet: {:?}", msg.input);
+                    }
+                    outlets.push((msg.fid, msg.outlet));
+                }
+                Resolution::Found => {
+                    found_conn.insert(msg.fid);
+                    connections.push((msg.fid, msg.outlet));
+                }
+            }
+            prog += 1;
             if self.verbose {
-                prog += 1;
                 print!(
-                    "\rReading Points: {}% ({}/{})",
+                    "\rProcessing Points: {}% ({}/{})",
                     prog * 100 / total,
                     prog,
                     total
                 );
                 std::io::stdout().flush().ok();
             }
-            let point = points_lyr
-                .feature(*fid)
-                .expect("FID comes from this layer; should work");
-            if let Some(geom) = point.geometry() {
-                let (mut x, mut y, _) = geom.get_point(0);
-
-                let mut searching = false;
-                let mut iter = 0;
-                loop {
-                    iter += 1;
-                    // find the stream points for stream closest to the point.
-                    let stream_points: Vec<(f64, f64)> =
-                        get_next_geom_pts(&mut streams_lyr, (x, y), self.threshold, searching);
-                    if stream_points.is_empty() || stream_points.len() == 1 || iter > 10000 {
-                        eprintln!("Outlet: {:?}", pt.coord2());
-                        break;
-                    }
-                    searching = true;
-                    let points: Vec<Point2D> = stream_points
-                        .iter()
-                        .map(|s| Point2D::new2(*s).unwrap())
-                        .collect();
-                    // the point if exists in the geometry, skip
-                    // everything before it; only relevant for the
-                    // first geom; but if there is a loop, then it
-                    // breaks things
-                    let pt_inside = points.iter().find_position(|p| *p == pt).map(|p| p.0);
-                    let points: Vec<Point2D> = if let Some(ind) = pt_inside {
-                        points.into_iter().skip(ind + 1).collect()
-                    } else {
-                        points.into_iter().collect()
-                    };
-                    if let Some(out) = points.iter().find(|p| points_map.contains_key(p)) {
-                        connections.push((pt.clone(), out.clone()));
-                        break;
-                    } else {
-                        (x, y) = stream_points.into_iter().last().unwrap();
-                    }
-                }
-            }
+            // if prog == total {
+            //     // without this there might be infinite loop; drop(sender) avoids that
+            //     break;
+            // }
         }
 
         let mut out_data = gdal_update_or_create(&self.output.0, &self.driver, self.overwrite)?;
@@ -157,28 +199,51 @@ impl CliArgs {
         }
         let defn = Defn::from_layer(&layer);
         for (start, end) in connections {
+            let (st_x, st_y, _) = points_lyr
+                .feature(start)
+                .and_then(|f| f.geometry().map(|g| g.get_point(0)))
+                .expect("FID comes from this layer; should work");
             let mut ft = Feature::new(&defn)?;
             let mut geom = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbLineString)?;
-            geom.add_point_2d(start.coord2());
+            geom.add_point_2d((st_x, st_y));
             geom.add_point_2d(end.coord2());
             ft.set_geometry(geom)?;
             // inp
-            if let Some(feat) = points_lyr.feature(points_map[&start]) {
-                for idx in 0..pts_defn.len() {
-                    if let Some(value) = feat.field(idx)? {
-                        ft.set_field(idx * 2, &value)?;
-                    }
-                }
-            }
-            // out
-            if let Some(feat) = points_lyr.feature(points_map[&end]) {
-                for idx in 0..pts_defn.len() {
-                    if let Some(value) = feat.field(idx)? {
-                        ft.set_field(idx * 2 + 1, &value)?;
-                    }
-                }
-            }
+            // if let Some(feat) = points_lyr.feature(points_map[&start]) {
+            //     for idx in 0..pts_defn.len() {
+            //         if let Some(value) = feat.field(idx)? {
+            //             ft.set_field(idx * 2, &value)?;
+            //         }
+            //     }
+            // }
+            // // out
+            // if let Some(feat) = points_lyr.feature(points_map[&end]) {
+            //     for idx in 0..pts_defn.len() {
+            //         if let Some(value) = feat.field(idx)? {
+            //             ft.set_field(idx * 2 + 1, &value)?;
+            //         }
+            //     }
+            // }
             ft.create(&mut layer)?;
+        }
+
+        let mut layer2 = txn.create_layer(LayerOptions {
+            name: "Outlets",
+            ty: gdal_sys::OGRwkbGeometryType::wkbLineString,
+            ..Default::default()
+        })?;
+        let defn = Defn::from_layer(&layer2);
+        for (start, end) in outlets.into_iter().filter(|(i, _)| !found_conn.contains(i)) {
+            let (st_x, st_y, _) = points_lyr
+                .feature(start)
+                .and_then(|f| f.geometry().map(|g| g.get_point(0)))
+                .expect("FID comes from this layer; should work");
+            let mut ft = Feature::new(&defn)?;
+            let mut geom = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbLineString)?;
+            geom.add_point_2d((st_x, st_y));
+            geom.add_point_2d(end.coord2());
+            ft.set_geometry(geom)?;
+            ft.create(&mut layer2)?;
         }
         txn.commit()?;
 
@@ -189,20 +254,118 @@ impl CliArgs {
     }
 }
 
-fn get_next_geom_pts(
-    layer: &mut Layer,
-    coord: (f64, f64),
-    radius: f64,
-    starts: bool,
-) -> Vec<(f64, f64)> {
+/// Message to send while running network detection algorithm
+struct Message {
+    fid: u64,
+    input: Point2D,
+    outlet: Point2D,
+    resolution: Resolution,
+}
+
+enum Resolution {
+    /// Outlet found for this point
+    Found,
+    /// Outlet not found, searched upto the second point
+    NotFound,
+    /// The stream branches here
+    Branch,
+}
+
+const MAX_ITER: usize = 10000;
+
+fn find_connections(
+    streams: &mut Layer,
+    points_map: &HashMap<Point2D, u64>,
+    fid: u64,
+    point: (Point2D, Point2D),
+    sender: &Sender<Message>,
+) {
+    let (mut x, mut y) = point.1.coord2();
+    let mut searching = false;
+    let mut iter = 0;
+
+    loop {
+        iter += 1;
+        // find the stream points for stream closest to the point.
+        let stream_points: Vec<Vec<(f64, f64)>> = get_next_geom_pts(streams, (x, y), searching);
+        if stream_points.is_empty() || iter > MAX_ITER {
+            _ = sender.send(Message {
+                fid,
+                input: point.0.clone(),
+                outlet: Point2D::new2((x, y)).unwrap(),
+                resolution: Resolution::NotFound,
+            });
+            return;
+        }
+        searching = true;
+        let points: Vec<Point2D> = stream_points
+            .iter()
+            .flatten()
+            .map(|s| Point2D::new2(*s).unwrap())
+            .collect();
+        // the point if exists in the geometry, skip
+        // everything before it; only relevant for the
+        // first geom; but if there is a loop, then it
+        // breaks things
+        let pt_inside = points.iter().find_position(|p| *p == &point.1).map(|p| p.0);
+        let points: Vec<Point2D> = if let Some(ind) = pt_inside {
+            points.into_iter().skip(ind + 1).collect()
+        } else {
+            points.into_iter().collect()
+        };
+        if let Some(out) = points.iter().find(|p| points_map.contains_key(p)) {
+            _ = sender.send(Message {
+                fid,
+                input: point.0.clone(),
+                outlet: out.clone(),
+                resolution: Resolution::Found,
+            });
+            return;
+        } else {
+            match &stream_points[..] {
+                [] => {
+                    // should already be covered by if stream_points.is_empty()
+                    _ = sender.send(Message {
+                        fid,
+                        input: point.0.clone(),
+                        outlet: Point2D::new2((x, y)).unwrap(),
+                        resolution: Resolution::NotFound,
+                    });
+                    return;
+                }
+                [pts, rest @ ..] => {
+                    (x, y) = *pts.iter().last().unwrap();
+                    // multiple geometries means it branches, and
+                    // we'll deal with them in other threads
+                    for pts in rest {
+                        let (x1, y1) = pts.iter().last().unwrap();
+                        if x1 != &x && y1 != &y {
+                            // if they converge it's fine
+                            _ = sender.send(Message {
+                                fid,
+                                input: point.0.clone(),
+                                outlet: Point2D::new2((*x1, *y1)).unwrap(),
+                                resolution: Resolution::Branch,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+const EPSILON: f64 = 0.0000005;
+
+fn get_next_geom_pts(layer: &mut Layer, coord: (f64, f64), starts: bool) -> Vec<Vec<(f64, f64)>> {
     layer.clear_spatial_filter();
     layer.set_spatial_filter_rect(
-        coord.0 - radius,
-        coord.1 - radius,
-        coord.0 + radius,
-        coord.1 + radius,
+        coord.0 - EPSILON,
+        coord.1 - EPSILON,
+        coord.0 + EPSILON,
+        coord.1 + EPSILON,
     );
-    let geoms: Vec<Vec<(f64, f64)>> = layer
+    layer
         .features()
         .filter_map(|f| f.geometry().map(get_geom_pts))
         .filter(|geom| {
@@ -210,22 +373,14 @@ fn get_next_geom_pts(
                 || geom
                     .get(0)
                     .map(|(x, y)| {
-                        (*x < (coord.0 + radius))
-                            & (*x > (coord.0 - radius))
-                            & (*y < (coord.1 + radius))
-                            & (*y > (coord.1 - radius))
+                        (*x < (coord.0 + EPSILON))
+                            & (*x > (coord.0 - EPSILON))
+                            & (*y < (coord.1 + EPSILON))
+                            & (*y > (coord.1 - EPSILON))
                     })
                     .unwrap_or_default()
         })
-        .collect();
-    match &geoms[..] {
-        [] => Vec::new(),
-        [g] => g.clone(),
-        [g, ..] => {
-            // multiple streams near the point, take the first one for now (assumes threashold is super small)
-            g.clone()
-        }
-    }
+        .collect()
 }
 
 fn get_geom_pts(geom: &Geometry) -> Vec<(f64, f64)> {
