@@ -34,6 +34,12 @@ pub struct CliArgs {
     /// Overwrite the output file if it exists
     #[arg(short = 'O', long)]
     overwrite: bool,
+    /// Number of cores to use for parallel processing
+    #[arg(short, long, default_value = "8")]
+    cores: usize,
+    // /// Optional Text file to output the network
+    // #[arg(short, long)]
+    // txt_output: PathBuf,
     /// Points file with points of interest
     #[arg(value_parser=parse_layer, value_name="POINTS_FILE[::LAYER]")]
     points: (PathBuf, String),
@@ -54,7 +60,7 @@ impl CliAction for CliArgs {
         let streams = streams_data.layer_by_name(&self.streams.1).unwrap();
 
         if self.ignore_spatial_ref || check_spatial_ref(&points, &streams).is_ok() {
-            self.network(points, streams)?;
+            self.network(points)?;
         }
 
         Ok(())
@@ -62,7 +68,7 @@ impl CliAction for CliArgs {
 }
 
 impl CliArgs {
-    fn network(&self, mut points_lyr: Layer, mut streams_lyr: Layer) -> anyhow::Result<()> {
+    fn network(&self, mut points_lyr: Layer) -> anyhow::Result<()> {
         println!("Reading Points");
         let points: HashMap<u64, (Point2D, Point2D)> = points_lyr
             .features()
@@ -86,7 +92,7 @@ impl CliArgs {
                 Entry::Vacant(v) => {
                     v.insert(*k);
                 }
-                Entry::Occupied(o) => {
+                Entry::Occupied(_) => {
                     found_conn.insert(*k);
                     connections.push((*k, v.0.clone()));
                 }
@@ -102,7 +108,7 @@ impl CliArgs {
                 .filter(|(i, _)| !found_conn.contains(i))
                 .collect(),
         ));
-        for _ in 0..16 {
+        for _ in 0..self.cores {
             let lyr = self.streams.clone();
             let pts_map = points_map.clone();
             let pts_proc = points_to_process.clone();
@@ -209,21 +215,21 @@ impl CliArgs {
             geom.add_point_2d(end.coord2());
             ft.set_geometry(geom)?;
             // inp
-            // if let Some(feat) = points_lyr.feature(points_map[&start]) {
-            //     for idx in 0..pts_defn.len() {
-            //         if let Some(value) = feat.field(idx)? {
-            //             ft.set_field(idx * 2, &value)?;
-            //         }
-            //     }
-            // }
+            if let Some(feat) = points_lyr.feature(start) {
+                for idx in 0..pts_defn.len() {
+                    if let Some(value) = feat.field(idx)? {
+                        ft.set_field(idx * 2, &value)?;
+                    }
+                }
+            }
             // // out
-            // if let Some(feat) = points_lyr.feature(points_map[&end]) {
-            //     for idx in 0..pts_defn.len() {
-            //         if let Some(value) = feat.field(idx)? {
-            //             ft.set_field(idx * 2 + 1, &value)?;
-            //         }
-            //     }
-            // }
+            if let Some(feat) = points_lyr.feature(points_map[&end]) {
+                for idx in 0..pts_defn.len() {
+                    if let Some(value) = feat.field(idx)? {
+                        ft.set_field(idx * 2 + 1, &value)?;
+                    }
+                }
+            }
             ft.create(&mut layer)?;
         }
 
