@@ -78,6 +78,12 @@ subcommands! {
     bignetwork BigNetwork,
     /// Snap the points to the geometries in the streams
     snap Snap,
+    /// Convert NHD Streams into a NADI compatible streams file
+    ///
+    /// This commands extracts the streams data from NHD streams file
+    /// using the attributes from NHDPlusFlowlineVAA to filter the
+    /// diverging paths.
+    nhdstreams NhdStreams
 }
 
 #[derive(Parser)]
