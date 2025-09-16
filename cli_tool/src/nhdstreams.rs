@@ -69,10 +69,11 @@ fn write_streams(out_data: &mut Dataset, streams: &mut Layer, verbose: bool) -> 
                 continue;
             }
             if let Ok(Some(ty)) = feat.field_as_integer(fty) {
-                if ty == 428 || ty == 566 {
+                if ty == 566 {
                     // https://hydro.nationalmap.gov/arcgis/rest/services/NHDPlus_HR/MapServer/3
                     // ftype = 428 is Pipeline; 566 is Coastline; there are more
                     // categories but removing just these
+                    // EDIT: pipeline is used for some dam's release, so can't remove that
                     continue;
                 }
                 // InNetwork = no means the streams are isolated from the whole network, but I think it's fine to leave them be

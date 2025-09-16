@@ -1,3 +1,10 @@
+/// There is a problem with this algorithm The isolated networks all
+/// seem to have zero-length connection from itself to itself. Which
+/// means the algorithm is returning the starting point as the
+/// connection output. After the NHD filtering of streams, there
+/// should not be any branches, so this algorithm should work
+/// fine. Find how the connection to itself is not avoided, and then
+/// fix that problem.
 use anyhow::{bail, Context};
 use clap::Args;
 use gdal::vector::{
@@ -70,13 +77,13 @@ impl CliAction for CliArgs {
 impl CliArgs {
     fn network(&self, mut points_lyr: Layer) -> anyhow::Result<()> {
         println!("Reading Points");
-        let points: HashMap<u64, (Point2D, Point2D)> = points_lyr
+        let points: HashMap<u64, Point2D> = points_lyr
             .features()
             .filter_map(|f| f.fid().map(|i| (i, f)))
             .filter_map(|(i, f)| {
                 f.geometry().map(|g| {
                     let p = Point2D::new3(g.get_point(0)).unwrap();
-                    (i, (p.clone(), p))
+                    (i, p)
                 })
             })
             .collect();
@@ -88,24 +95,26 @@ impl CliArgs {
         let mut points_map: HashMap<Point2D, u64> = HashMap::with_capacity(points.len());
         points
             .iter()
-            .for_each(|(k, v)| match points_map.entry(v.0.clone()) {
+            .for_each(|(k, v)| match points_map.entry(v.clone()) {
                 Entry::Vacant(v) => {
                     v.insert(*k);
                 }
                 Entry::Occupied(_) => {
                     found_conn.insert(*k);
-                    connections.push((*k, v.0.clone()));
+                    connections.push((*k, v.clone()));
                 }
             });
+
+        eprintln!("Connections: {:?}", found_conn);
         if self.verbose {
             println!("Start Connection Seeking");
         }
         let (sender, receiver) = mpsc::channel();
         let points_to_process: Arc<Mutex<VecDeque<_>>> = Arc::new(Mutex::new(
-            points
+            points_map
                 .clone()
                 .into_iter()
-                .filter(|(i, _)| !found_conn.contains(i))
+                .map(|(p, i)| (i, (p.clone(), p)))
                 .collect(),
         ));
         for _ in 0..self.cores {
@@ -303,23 +312,31 @@ fn find_connections(
             });
             return;
         }
-        searching = true;
-        let points: Vec<Point2D> = stream_points
+        let mut points: Vec<Vec<Point2D>> = stream_points
             .iter()
-            .flatten()
-            .map(|s| Point2D::new2(*s).unwrap())
+            .map(|s| s.iter().map(|p| Point2D::new2(*p).unwrap()).collect())
             .collect();
-        // the point if exists in the geometry, skip
-        // everything before it; only relevant for the
-        // first geom; but if there is a loop, then it
-        // breaks things
-        let pt_inside = points.iter().find_position(|p| *p == &point.1).map(|p| p.0);
-        let points: Vec<Point2D> = if let Some(ind) = pt_inside {
-            points.into_iter().skip(ind + 1).collect()
-        } else {
-            points.into_iter().collect()
-        };
-        if let Some(out) = points.iter().find(|p| points_map.contains_key(p)) {
+        if !searching {
+            // the point if exists in the geometry, skip
+            // everything before it; only relevant for the
+            // first geom; but if there is a loop, then it
+            // breaks things
+            points = points
+                .into_iter()
+                .map(|p| {
+                    let s = p
+                        .iter()
+                        .find_position(|p| *p == &point.1)
+                        .map(|p| p.0)
+                        .unwrap_or_default()
+                        + 1;
+                    p.into_iter().skip(s).collect()
+                })
+                .collect();
+        }
+
+        searching = true;
+        if let Some(out) = points.iter().flatten().find(|p| points_map.contains_key(p)) {
             _ = sender.send(Message {
                 fid,
                 input: point.0.clone(),
@@ -327,33 +344,32 @@ fn find_connections(
                 resolution: Resolution::Found,
             });
             return;
-        } else {
-            match &stream_points[..] {
-                [] => {
-                    // should already be covered by if stream_points.is_empty()
-                    _ = sender.send(Message {
-                        fid,
-                        input: point.0.clone(),
-                        outlet: Point2D::new2((x, y)).unwrap(),
-                        resolution: Resolution::NotFound,
-                    });
-                    return;
-                }
-                [pts, rest @ ..] => {
-                    (x, y) = *pts.iter().last().unwrap();
-                    // multiple geometries means it branches, and
-                    // we'll deal with them in other threads
-                    for pts in rest {
-                        let (x1, y1) = pts.iter().last().unwrap();
-                        if x1 != &x && y1 != &y {
-                            // if they converge it's fine
-                            _ = sender.send(Message {
-                                fid,
-                                input: point.0.clone(),
-                                outlet: Point2D::new2((*x1, *y1)).unwrap(),
-                                resolution: Resolution::Branch,
-                            });
-                        }
+        }
+        match &stream_points[..] {
+            [] => {
+                // should already be covered by 'if stream_points.is_empty()'
+                _ = sender.send(Message {
+                    fid,
+                    input: point.0.clone(),
+                    outlet: Point2D::new2((x, y)).unwrap(),
+                    resolution: Resolution::NotFound,
+                });
+                return;
+            }
+            [pts, rest @ ..] => {
+                (x, y) = *pts.iter().last().unwrap();
+                // multiple geometries means it branches, and
+                // we'll deal with them in other threads
+                for pts in rest {
+                    let (x1, y1) = pts.iter().last().unwrap();
+                    if x1 != &x || y1 != &y {
+                        // if they converge it's fine
+                        _ = sender.send(Message {
+                            fid,
+                            input: point.0.clone(),
+                            outlet: Point2D::new2((*x1, *y1)).unwrap(),
+                            resolution: Resolution::Branch,
+                        });
                     }
                 }
             }
