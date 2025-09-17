@@ -370,13 +370,16 @@ fn find_connections(
 
         searching = true;
         if let Some(out) = points.iter().flatten().find(|p| points_map.contains_key(p)) {
-            _ = sender.send(Message {
-                fid,
-                input: point.0.clone(),
-                outlet: out.clone(),
-                resolution: Resolution::Found,
-            });
-            return;
+            if out != &point.0 && out != &point.1 {
+                // can't be the same point (avoid selfloop in graph)
+                _ = sender.send(Message {
+                    fid,
+                    input: point.0.clone(),
+                    outlet: out.clone(),
+                    resolution: Resolution::Found,
+                });
+                return;
+            }
         }
         match &stream_points[..] {
             [] => {
