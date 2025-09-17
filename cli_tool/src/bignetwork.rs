@@ -90,6 +90,7 @@ impl CliArgs {
         println!("Mapping Points");
         let mut connections = Vec::with_capacity(points.len());
         let mut outlets = Vec::with_capacity(points.len());
+        let mut branches = Vec::new();
         let mut found_conn: HashSet<u64> = HashSet::with_capacity(points.len());
         // This clears out the points with duplicate locations by connecting them to each other
         let mut points_map: HashMap<Point2D, u64> = HashMap::with_capacity(points.len());
@@ -154,7 +155,7 @@ impl CliArgs {
                     // a way to cache the branches and reuse them for
                     // other connections would help reduce the
                     // processing.
-                    if *count < 10 {
+                    if *count < 25 {
                         // one for this, another for NotFound or Found we'll get later
                         total += 2;
                         points_to_process
@@ -167,13 +168,17 @@ impl CliArgs {
                 }
                 Resolution::NotFound => {
                     if !branch_counts.contains_key(&msg.fid) {
-                        eprintln!("Outlet: {:?}", msg.input);
+                        eprintln!("\rOutlet: {:?}", msg.input);
                     }
                     outlets.push((msg.fid, msg.outlet));
                 }
                 Resolution::Found => {
-                    found_conn.insert(msg.fid);
-                    connections.push((msg.fid, msg.outlet));
+                    if !found_conn.insert(msg.fid) {
+                        println!("\rBranch: {:?}", msg.input);
+                        branches.push((msg.fid, msg.outlet));
+                    } else {
+                        connections.push((msg.fid, msg.outlet));
+                    }
                 }
             }
             prog += 1;
@@ -191,6 +196,13 @@ impl CliArgs {
             //     break;
             // }
         }
+
+        println!(
+            "Outlets: {}, Branches: {}, Connections: {}",
+            outlets.len(),
+            branches.len(),
+            connections.len()
+        );
 
         let mut out_data = gdal_update_or_create(&self.output.0, &self.driver, self.overwrite)?;
         let mut txn = out_data.start_transaction().expect("Transaction failed");
@@ -259,6 +271,27 @@ impl CliArgs {
             geom.add_point_2d(end.coord2());
             ft.set_geometry(geom)?;
             ft.create(&mut layer2)?;
+        }
+
+        if !branches.is_empty() {
+            let mut layer3 = txn.create_layer(LayerOptions {
+                name: "Branches",
+                ty: gdal_sys::OGRwkbGeometryType::wkbLineString,
+                ..Default::default()
+            })?;
+            let defn = Defn::from_layer(&layer3);
+            for (start, end) in branches.into_iter() {
+                let (st_x, st_y, _) = points_lyr
+                    .feature(start)
+                    .and_then(|f| f.geometry().map(|g| g.get_point(0)))
+                    .expect("FID comes from this layer; should work");
+                let mut ft = Feature::new(&defn)?;
+                let mut geom = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbLineString)?;
+                geom.add_point_2d((st_x, st_y));
+                geom.add_point_2d(end.coord2());
+                ft.set_geometry(geom)?;
+                ft.create(&mut layer3)?;
+            }
         }
         txn.commit()?;
 

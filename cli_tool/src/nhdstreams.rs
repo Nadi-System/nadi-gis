@@ -66,6 +66,7 @@ fn write_streams(out_data: &mut Dataset, streams: &mut Layer, verbose: bool) -> 
         }
         if let Ok(Some(i)) = feat.field_as_integer(dc) {
             if i > 1 {
+                // removes minor branches
                 continue;
             }
             if let Ok(Some(ty)) = feat.field_as_integer(fty) {
