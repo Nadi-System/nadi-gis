@@ -41,7 +41,7 @@ pub struct CliArgs {
     /// Overwrite the output file if it exists
     #[arg(short = 'O', long)]
     overwrite: bool,
-    /// Number of cores to use for parallel processing
+    /// IGORES Number of cores to use for parallel processing (doesn't work)
     #[arg(short, long, default_value = "8")]
     cores: usize,
     // /// Optional Text file to output the network
@@ -118,26 +118,21 @@ impl CliArgs {
                 .map(|(p, i)| (i, (p.clone(), p)))
                 .collect(),
         ));
-        for _ in 0..self.cores {
-            let lyr = self.streams.clone();
-            let pts_map = points_map.clone();
-            let pts_proc = points_to_process.clone();
-            let tx = sender.clone();
-            thread::spawn(move || {
-                let streams_data = Dataset::open(&lyr.0).unwrap();
-                let mut streams = streams_data.layer_by_name(&lyr.1).unwrap();
-                loop {
-                    let val = pts_proc.lock().unwrap().pop_front();
-                    if let Some((fid, pt)) = val {
-                        find_connections(&mut streams, &pts_map, fid, pt, &tx);
-                    } else {
-                        break;
-                    }
+        let lyr = self.streams.clone();
+        let pts_map = points_map.clone();
+        let pts_proc = points_to_process.clone();
+        thread::spawn(move || {
+            let streams_data = Dataset::open(&lyr.0).unwrap();
+            let mut streams = streams_data.layer_by_name(&lyr.1).unwrap();
+            loop {
+                let val = pts_proc.lock().unwrap().pop_front();
+                if let Some((fid, pt)) = val {
+                    find_connections(&mut streams, &pts_map, fid, pt, &sender);
+                } else {
+                    break;
                 }
-            });
-        }
-
-        drop(sender);
+            }
+        });
 
         let mut prog = 0u64;
         let mut total = points_lyr.feature_count();
