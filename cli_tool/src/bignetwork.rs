@@ -88,9 +88,10 @@ impl CliArgs {
             })
             .collect();
         println!("Mapping Points");
-        let mut connections = Vec::with_capacity(points.len());
+        let mut connections = HashMap::with_capacity(points.len());
         let mut outlets = Vec::with_capacity(points.len());
         let mut branches = Vec::new();
+
         let mut found_conn: HashSet<u64> = HashSet::with_capacity(points.len());
         // This clears out the points with duplicate locations by connecting them to each other
         let mut points_map: HashMap<Point2D, u64> = HashMap::with_capacity(points.len());
@@ -102,7 +103,7 @@ impl CliArgs {
                 }
                 Entry::Occupied(_) => {
                     found_conn.insert(*k);
-                    connections.push((*k, v.clone()));
+                    connections.insert(*k, v.clone());
                 }
             });
 
@@ -169,10 +170,14 @@ impl CliArgs {
                 }
                 Resolution::Found => {
                     if !found_conn.insert(msg.fid) {
-                        println!("\rBranch: {:?}", msg.input);
-                        branches.push((msg.fid, msg.outlet));
+                        if Some(&msg.outlet) == connections.get(&msg.fid) {
+                            // Branches converge, ignore it
+                        } else {
+                            println!("\rBranch: {:?}", msg.input);
+                            branches.push((msg.fid, msg.outlet));
+                        }
                     } else {
-                        connections.push((msg.fid, msg.outlet));
+                        connections.insert(msg.fid, msg.outlet);
                     }
                 }
             }
