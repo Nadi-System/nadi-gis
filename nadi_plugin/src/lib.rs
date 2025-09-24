@@ -110,6 +110,21 @@ mod gis {
         res
     }
 
+    /// Show the layers of the GIS file as a list
+    #[env_func]
+    fn line(
+        /// list of points/geometries to join (takes first point only)
+        #[args]
+        points: &[Attribute],
+    ) -> Result<String> {
+        let mut line = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbLineString)?;
+        for p in points {
+            let p = Geometry::from_wkt(&p.repr())?.get_point(0);
+            line.add_point(p);
+        }
+        Ok(line.wkt()?)
+    }
+
     /// Load network from a GIS file
     ///
     /// Loads the network from a gis file containing the edges in fields
@@ -326,7 +341,6 @@ mod gis {
         let mut out_data = driver.create_vector_only(&file)?;
         let mut layer = out_data.create_layer(LayerOptions {
             name: &layer,
-            ty: gdal_sys::OGRwkbGeometryType::wkbPoint,
             ..Default::default()
         })?;
         let fields: Vec<(String, (u32, Attr2FieldValue))> = fields
