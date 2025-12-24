@@ -128,7 +128,7 @@ mod gis {
     /// Load network from a GIS file
     ///
     /// Loads the network from a gis file containing the edges in fields
-    #[network_func(ignore_null = false)]
+    #[network_func(ignore_null = false, force = false)]
     fn load_network(
         net: &mut Network,
         /// GIS file to load (can be any format GDAL can understand)
@@ -141,6 +141,8 @@ mod gis {
         layer: Option<String>,
         /// Ignore feature if it has fields with null value
         ignore_null: bool,
+        /// Force overwrite the output if already present
+        force: bool,
     ) -> Result<()> {
         let data = Dataset::open(file)?;
         let mut lyr = if let Some(lyr) = layer {
@@ -177,7 +179,7 @@ mod gis {
             .iter()
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
-        *net = Network::from_edges(&edges_str).map_err(nadi_core::anyhow::Error::msg)?;
+        *net = Network::from_edges(&edges_str, force).map_err(nadi_core::anyhow::Error::msg)?;
         Ok(())
     }
 
