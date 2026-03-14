@@ -128,7 +128,14 @@ mod gis {
     /// Load network from a GIS file
     ///
     /// Loads the network from a gis file containing the edges in fields
-    #[network_func(ignore_null = false, force = false)]
+    #[network_func(
+        loadattrs = true,
+        outattrs = false,
+        sanitize = true,
+        ignore = "",
+        ignore_null = false,
+        force = false
+    )]
     fn load_network(
         net: &mut Network,
         /// GIS file to load (can be any format GDAL can understand)
@@ -139,6 +146,14 @@ mod gis {
         destination: String,
         /// layer of the GIS file, first one picked by default
         layer: Option<String>,
+        /// Load attributes from GIS file
+        loadattrs: bool,
+        /// attributes are for output instead of input node
+        outattrs: bool,
+        /// Field names separated by comma, to ignore
+        ignore: String,
+        /// sanitize the name of the fields
+        sanitize: bool,
         /// Ignore feature if it has fields with null value
         ignore_null: bool,
         /// Force overwrite the output if already present
@@ -162,6 +177,7 @@ mod gis {
         let fid_s = defn.field_index(&source)?;
         let fid_d = defn.field_index(&destination)?;
         let mut edges = Vec::with_capacity(lyr.feature_count() as usize);
+        let mut attrs = HashMap::<String, AttrMap>::new();
         for f in lyr.features() {
             let inp_name = match f.field_as_string(fid_s)? {
                 Some(n) => n,
@@ -173,6 +189,26 @@ mod gis {
                 None if ignore_null => continue,
                 None => return Err(nadi_core::anyhow::Error::msg("Null value on source field")),
             };
+
+            if loadattrs {
+                let am: AttrMap = f
+                    .fields()
+                    .filter(|(f, _)| !ignore.contains(f))
+                    .filter_map(|(f, v)| {
+                        let f = if sanitize { sanitize_key(&f) } else { f };
+                        v.and_then(gis_value_to_attr).map(|v| (RString::from(f), v))
+                    })
+                    .collect();
+
+                attrs.insert(
+                    if outattrs {
+                        out_name.clone()
+                    } else {
+                        inp_name.clone()
+                    },
+                    am,
+                );
+            }
             edges.push((inp_name, out_name));
         }
         let edges_str: Vec<_> = edges
@@ -180,6 +216,14 @@ mod gis {
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         *net = Network::from_edges(&edges_str, force).map_err(nadi_core::anyhow::Error::msg)?;
+        for node in net.nodes() {
+            let node: &mut NodeInner = &mut node.lock();
+            let name = node.name();
+            match attrs.remove(name) {
+                Some(am) => node.attr_map_mut().extend(am),
+                None => (),
+            }
+        }
         Ok(())
     }
 
