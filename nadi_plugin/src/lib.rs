@@ -115,7 +115,7 @@ mod gis {
     fn line(
         /// list of points/geometries to join (takes first point only)
         #[args]
-        points: &[Attribute],
+        points: Vec<Attribute>,
     ) -> Result<String> {
         let mut line = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbLineString)?;
         for p in points {
