@@ -115,11 +115,11 @@ mod gis {
     fn line(
         /// list of points/geometries to join (takes first point only)
         #[args]
-        points: Vec<Attribute>,
+        points: Vec<String>,
     ) -> Result<String> {
         let mut line = Geometry::empty(gdal_sys::OGRwkbGeometryType::wkbLineString)?;
         for p in points {
-            let p = Geometry::from_wkt(&p.repr())?.get_point(0);
+            let p = Geometry::from_wkt(&p)?.get_point(0);
             line.add_point(p);
         }
         Ok(line.wkt()?)
@@ -129,7 +129,6 @@ mod gis {
     ///
     /// Loads the network from a gis file containing the edges in fields
     #[network_func(
-        loadattrs = true,
         outattrs = false,
         sanitize = true,
         ignore = "",
@@ -146,8 +145,8 @@ mod gis {
         destination: String,
         /// layer of the GIS file, first one picked by default
         layer: Option<String>,
-        /// Load attributes from GIS file
-        loadattrs: bool,
+        /// Load attributes from GIS file into this attribute
+        loadattrs: Option<String>,
         /// attributes are for output instead of input node
         outattrs: bool,
         /// Field names separated by comma, to ignore
@@ -177,7 +176,7 @@ mod gis {
         let fid_s = defn.field_index(&source)?;
         let fid_d = defn.field_index(&destination)?;
         let mut edges = Vec::with_capacity(lyr.feature_count() as usize);
-        let mut attrs = HashMap::<String, AttrMap>::new();
+        let mut attrs = HashMap::<(String, String), AttrMap>::new();
         for f in lyr.features() {
             let inp_name = match f.field_as_string(fid_s)? {
                 Some(n) => n,
@@ -190,7 +189,7 @@ mod gis {
                 None => return Err(nadi_core::anyhow::Error::msg("Null value on source field")),
             };
 
-            if loadattrs {
+            if loadattrs.is_some() {
                 let am: AttrMap = f
                     .fields()
                     .filter(|(f, _)| !ignore.contains(f))
@@ -200,14 +199,7 @@ mod gis {
                     })
                     .collect();
 
-                attrs.insert(
-                    if outattrs {
-                        out_name.clone()
-                    } else {
-                        inp_name.clone()
-                    },
-                    am,
-                );
+                attrs.insert((inp_name.clone(), out_name.clone()), am);
             }
             edges.push((inp_name, out_name));
         }
@@ -216,12 +208,24 @@ mod gis {
             .map(|(k, v)| (k.as_str(), v.as_str()))
             .collect();
         *net = Network::from_edges(&edges_str, force).map_err(nadi_core::anyhow::Error::msg)?;
-        for node in net.nodes() {
-            let node: &mut NodeInner = &mut node.lock();
-            let name = node.name();
-            match attrs.remove(name) {
-                Some(am) => node.attr_map_mut().extend(am),
-                None => (),
+        if let Some(edge_attr) = loadattrs {
+            for node in net.nodes() {
+                let node: &mut NodeInner = &mut node.lock();
+                let name = node.name();
+                let edge_map: AttrMap = if outattrs {
+                    node.inputs()
+                } else {
+                    node.outputs()
+                }
+                .iter()
+                .filter_map(|inp| {
+                    attrs
+                        .remove(&(name.to_string(), inp.name().to_string()))
+                        .map(|v| (inp.name().to_string().into(), v.into()))
+                })
+                .collect();
+                node.attr_map_mut()
+                    .insert(edge_attr.clone().into(), edge_map.into());
             }
         }
         Ok(())
