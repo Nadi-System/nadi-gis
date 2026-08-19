@@ -32,6 +32,12 @@ pub struct CliArgs {
     /// Overwrite the network file if it exists
     #[arg(short = 'O', long)]
     overwrite: bool,
+    /// allow bifurcations in the network
+    ///
+    /// The network is assumed to be rooted tree graph with no nodes
+    /// containing more than one output node. But this options allows
+    /// multiple output nodes converting the graph into a DAG
+    bifurcations: bool,
     /// Output network GIS file
     ///
     /// If given the subset of the stream network touching the points

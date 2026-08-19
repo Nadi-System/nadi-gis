@@ -44,6 +44,12 @@ pub struct CliArgs {
     /// IGORES Number of cores to use for parallel processing (doesn't work)
     #[arg(short, long, default_value = "8")]
     cores: usize,
+    /// allow bifurcations in the network
+    ///
+    /// The network is assumed to be rooted tree graph with no nodes
+    /// containing more than one output node. But this options allows
+    /// multiple output nodes converting the graph into a DAG
+    bifurcations: bool,
     // /// Optional Text file to output the network
     // #[arg(short, long)]
     // txt_output: PathBuf,
